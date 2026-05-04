@@ -1,0 +1,3272 @@
+# Cell 1: Install all required libraries
+!pip install pandas numpy scikit-learn
+!pip install sentence-transformers
+!pip install torch torchvision torchaudio
+!pip install transformers
+!pip install twilio python-dotenv
+!pip install pillow opencv-python
+!pip install requests beautifulsoup4
+!pip install gradio
+!pip install openpyxl
+
+print("✅ All libraries installed successfully!")
+#cell 2
+import pandas as pd
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import warnings
+warnings.filterwarnings('ignore')
+
+print("✅ All imports successful!")
+print("\nPython Libraries Ready for AgriBot")
+
+
+#cell 3
+import pandas as pd
+import os
+
+# Cell 3: Load Bengali Agricultural Knowledge Base from CSV
+file_path = '/kaggle/input/datasets/haiderrabbi/details/knowledge_data.csv'
+
+# Check if the file exists to avoid errors
+if os.path.exists(file_path):
+    # Load the CSV file
+    # Note: encoding='utf-8-sig' is often best for Bengali text in CSVs
+    kb = pd.read_csv(file_path, encoding='utf-8-sig')
+
+    print("✅ Knowledge Base লোড সম্পন্ন!")
+    print(f"\nমোট প্রশ্ন-উত্তর: {len(kb)} টি")
+    print(f"ক্যাটাগরি: {kb['Category'].unique().tolist()}")
+
+    # Display the first few rows to verify
+    print(f"\nপ্রথম 5 প্রশ্নোত্তর:")
+    print(kb[['Question','Answer','Disease_Name']].head())
+else:
+    print(f"❌ Error: {file_path} ফাইলটি খুঁজে পাওয়া যায়নি।")
+
+
+# Cell 4: Data Preprocessing
+
+import re
+import unicodedata
+
+def clean_bengali_text(text):
+    
+    # Extra spaces remove করো
+    text = ' '.join(text.split())
+
+    # Normalize করো
+    text = unicodedata.normalize('NFKD', text)
+
+    # Lowercase করো
+    text = text.lower()
+
+    return text
+
+# প্রতিটি প্রশ্নকে clean করো
+kb['Cleaned_Question'] = kb['Question'].apply(clean_bengali_text)
+
+print("✅ Text Cleaning সম্পন্ন!")
+print("\nCleaned Questions (প্রথম 5):")
+for i in range(5):
+    print(f"\nOriginal:  {kb['Question'].iloc[i]}")
+    print(f"Cleaned:   {kb['Cleaned_Question'].iloc[i]}")
+
+
+# Cell 5: Save Knowledge Base as CSV
+
+# Colab এ save করো
+csv_path = '/content/agribot_knowledge.csv'
+
+# সব columns save করো
+kb.to_csv(csv_path, index=False, encoding='utf-8')
+
+print(f"✅ Knowledge Base saved at: {csv_path}")
+print(f"\nFile size: {len(kb)} rows")
+print(f"Columns: {kb.columns.tolist()}")
+
+# Verification
+loaded_kb = pd.read_csv(csv_path, encoding='utf-8')
+print(f"\n✅ File verified! Loaded {len(loaded_kb)} rows")
+print("\nSample data:")
+print(loaded_kb[['Question', 'Category', 'Disease_Name']].head(10))
+
+
+# Cell 6: TF-IDF Search Setup — FIXED
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+import unicodedata
+
+# Knowledge base load করো
+kb = pd.read_csv('/content/agribot_knowledge.csv', encoding='utf-8')
+
+# Cleaned_Question না থাকলে তৈরি করো
+if 'Cleaned_Question' not in kb.columns:
+    def _clean(text):
+        text = ' '.join(text.split())
+        text = unicodedata.normalize('NFKD', text)
+        return text.lower()
+    kb['Cleaned_Question'] = kb['Question'].apply(_clean)
+
+# TF-IDF Vectorizer তৈরি করো
+vectorizer = TfidfVectorizer(
+    analyzer='char',
+    ngram_range=(2, 3),
+    lowercase=True,
+    strip_accents='unicode'
+)
+
+# Knowledge base এর সব প্রশ্ন vectorize করো
+question_vectors = vectorizer.fit_transform(kb['Cleaned_Question'].values)
+
+print("✅ TF-IDF Vectorizer Setup সম্পন্ন!")
+print(f"\nVector shape: {question_vectors.shape}")
+print(f"Vocabulary size: {len(vectorizer.get_feature_names_out())}")
+
+# ── IMMEDIATELY SAVE (যাতে পরের cells কাজ করে) ──
+import pickle, scipy.sparse
+
+with open('/content/tfidf_vectorizer.pkl', 'wb') as f:
+    pickle.dump(vectorizer, f)
+scipy.sparse.save_npz('/content/question_vectors.npz', question_vectors)
+
+print("\n✅ Vectorizer & Vectors saved to disk!")
+
+
+
+# Cell 7: Simple Search Function
+
+def search_knowledge_base(farmer_question, kb, vectorizer, top_k=1):
+
+    # Farmer এর প্রশ্ন clean করো
+    cleaned_question = clean_bengali_text(farmer_question)
+
+    # Question vectorize করো
+    question_vector = vectorizer.transform([cleaned_question])
+
+    # Knowledge base এর সব প্রশ্নের সাথে similarity calculate করো
+    similarities = cosine_similarity(question_vector, question_vectors)[0]
+
+    # Top match খুঁজো
+    top_indices = np.argsort(similarities)[-top_k:][::-1]
+
+    results = []
+    for idx in top_indices:
+        result = {
+            'Question': kb.iloc[idx]['Question'],
+            'Answer': kb.iloc[idx]['Answer'],
+            'Disease': kb.iloc[idx]['Disease_Name'],
+            'Category': kb.iloc[idx]['Category'],
+            'Similarity': similarities[idx]
+        }
+        results.append(result)
+
+    return results[0] if top_k == 1 else results
+
+# Test করো
+test_questions = [
+    "ধান গাছে বাদামী দাগ হয়েছে",
+    "আলুতে রোগ হয়েছে",
+    "জৈব সার তৈরি করতে চাই",
+    "কীভাবে সেচ দিতে হয়",
+    "পোকা দমন এর উপায়"
+]
+
+print("=" * 80)
+print("AGRIBOT SEARCH TEST")
+print("=" * 80)
+
+for question in test_questions:
+    result = search_knowledge_base(question, kb, vectorizer)
+
+    print(f"\n📱 Farmer এর প্রশ্ন: {question}")
+    print(f"   Confidence: {result['Similarity']:.0%}")
+    print(f"   Disease/Topic: {result['Disease']}")
+    print(f"   Category: {result['Category']}")
+    print(f"   উত্তর: {result['Answer'][:100]}...")
+
+
+
+# Cell 8: Knowledge Base Statistics
+
+import matplotlib.pyplot as plt
+
+print("=" * 80)
+print("AGRIBOT KNOWLEDGE BASE STATISTICS")
+print("=" * 80)
+
+# Total Q&A
+print(f"\n📊 মোট প্রশ্ন-উত্তর জোড়া: {len(kb)}")
+
+# Category wise breakdown
+print("\n📂 ক্যাটাগরি অনুযায়ী বিস্তারণ:")
+category_counts = kb['Category'].value_counts()
+for cat, count in category_counts.items():
+    print(f"   • {cat}: {count} টি")
+
+# Disease wise breakdown
+print("\n🌾 রোগ-সমস্যা অনুযায়ী:")
+disease_counts = kb['Disease_Name'].value_counts()
+print(f"   • মোট অনন্য টপিক: {len(disease_counts)}")
+print("\n   প্রথম 10 টি:")
+for i, (disease, count) in enumerate(disease_counts.head(10).items(), 1):
+    print(f"      {i}. {disease}")
+
+# Question length analysis
+kb['Question_Length'] = kb['Question'].str.len()
+print(f"\n📝 প্রশ্নের দৈর্ঘ্য:")
+print(f"   • গড়: {kb['Question_Length'].mean():.0f} characters")
+print(f"   • সর্বোচ্চ: {kb['Question_Length'].max()} characters")
+print(f"   • সর্বনিম্ন: {kb['Question_Length'].min()} characters")
+
+# Answer length analysis
+kb['Answer_Length'] = kb['Answer'].str.len()
+print(f"\n💬 উত্তরের দৈর্ঘ্য:")
+print(f"   • গড়: {kb['Answer_Length'].mean():.0f} characters")
+print(f"   • সর্বোচ্চ: {kb['Answer_Length'].max()} characters")
+
+
+
+# Cell 11: Helper Functions
+
+import unicodedata
+import re
+
+def clean_bengali_text(text):
+    """Bengali text clean করো"""
+    text = ' '.join(text.split())
+    text = unicodedata.normalize('NFKD', text)
+    text = text.lower()
+    return text
+
+def search_knowledge_base(farmer_question):
+    # Clean question
+    cleaned_question = clean_bengali_text(farmer_question)
+
+    # Vectorize
+    question_vector = vectorizer.transform([cleaned_question])
+
+    # Calculate similarities
+    similarities = cosine_similarity(question_vector, question_vectors)[0]
+
+    # Find best match
+    best_idx = np.argmax(similarities)
+    best_similarity = similarities[best_idx]
+
+    # Extract data
+    answer = kb.iloc[best_idx]['Answer']
+    disease = kb.iloc[best_idx]['Disease_Name']
+    category = kb.iloc[best_idx]['Category']
+
+    return {
+        'answer': answer,
+        'disease': disease,
+        'category': category,
+        'confidence': best_similarity
+    }
+
+def format_whatsapp_response(result):
+    """
+    WhatsApp এর জন্য response format করো
+    """
+
+    confidence_emoji = "🟢" if result['confidence'] > 0.7 else "🟡"
+
+    response = f"""
+{confidence_emoji} *সমস্যা:* {result['disease']}
+📊 *বিশ্বাসযোগ্যতা:* {result['confidence']:.0%}
+
+💡 *পরামর্শ:*
+{result['answer']}
+
+_এটি AI সহায়তা। গুরুতর সমস্যায় কৃষি অফিসে যোগাযোগ করুন।_
+"""
+    return response.strip()
+
+print("✅ Helper functions created successfully!")
+
+
+# Cell 12: Install Twilio
+
+!pip install twilio
+!pip install python-dotenv
+!pip install flask
+!pip install pyngrok
+
+print("✅ Twilio and Flask installed!")
+
+
+# Cell 13: Setup Twilio Client
+
+from twilio.rest import Client
+import os
+
+# Twilio Credentials (তোমার credentials দিয়ে replace করো)
+TWILIO_ACCOUNT_SID = "AC28934780455fa3eefc8999e46d261a1f"  # তোমার Account SID
+TWILIO_AUTH_TOKEN = "67a129f7ccd829dc49547c75222e6dd5"  # তোমার Auth Token
+TWILIO_WHATSAPP_NUMBER = "+14155238886"  # Twilio WhatsApp number
+
+# Twilio client initialize করো
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+print("✅ Twilio Client initialized!")
+print(f"Twilio WhatsApp Number: {TWILIO_WHATSAPP_NUMBER}")
+
+
+# Cell 14: Test Twilio Message
+
+from twilio.rest import Client
+
+# Test করার জন্য
+YOUR_WHATSAPP_NUMBER = "+8801581364531"  # তোমার phone number এ +880 দিয়ে শুরু
+
+try:
+    message = twilio_client.messages.create(
+        body="🤖 AgriBot test message - সবকিছু ঠিক আছে!",
+        from_="whatsapp:+14155238886",
+        to="whatsapp:+8801581364531"
+    )
+
+    print("✅ Test message sent successfully!")
+    print(f"Message SID: {message.sid}")
+    print("\n📱 Check your WhatsApp - তুমি একটি test message পাবে")
+
+except Exception as e:
+    print(f"❌ Error: {str(e)}")
+    print("\nTwilio credentials check করো অথবা WhatsApp number format ঠিক করো")
+
+
+# Cell 15: Flask WhatsApp Bot Application
+
+from flask import Flask, request, Response
+from twilio.rest import Client
+from twilio.twiml.messaging_response import MessagingResponse
+import json
+from datetime import datetime
+
+# ==========================================
+# 1. FLASK APP INITIALIZATION
+# ==========================================
+
+app = Flask(__name__)
+
+# ==========================================
+# 2. TWILIO CONFIGURATION
+# ==========================================
+
+TWILIO_ACCOUNT_SID = "AC28934780455fa3eefc8999e46d261a1f"  # Replace করো
+TWILIO_AUTH_TOKEN = "67a129f7ccd829dc49547c75222e6dd5"  # Replace করো
+TWILIO_WHATSAPP_NUMBER = "+14155238886"  # Replace করো
+
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+# ==========================================
+# 3. MESSAGE HISTORY (Demo এর জন্য)
+# ==========================================
+
+message_history = []
+
+# ==========================================
+# 4. WEBHOOK ENDPOINT
+# ==========================================
+
+@app.route('/whatsapp', methods=['POST'])
+def whatsapp_webhook():
+    """
+    WhatsApp messages receive করার endpoint
+    Twilio এই endpoint এ POST request পাঠাবে
+    """
+
+    try:
+        # WhatsApp থেকে data extract করো
+        incoming_message = request.values.get('Body', '').strip()
+        from_number = request.values.get('From', '')
+
+        print(f"\n📱 New Message Received:")
+        print(f"   From: {from_number}")
+        print(f"   Message: {incoming_message}")
+        print(f"   Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Message save করো (history এ)
+        message_history.append({
+            'from': from_number,
+            'message': incoming_message,
+            'timestamp': datetime.now().isoformat()
+        })
+
+        # Empty message handle করো
+        if not incoming_message:
+            response_text = "দয়া করে আপনার প্রশ্ন লিখুন। 🌾"
+        else:
+            # Knowledge base এ search করো
+            result = search_knowledge_base(incoming_message)
+
+            # Response format করো
+            response_text = format_whatsapp_response(result)
+
+            print(f"\n✅ Response sent:")
+            print(f"   Confidence: {result['confidence']:.0%}")
+            print(f"   Disease: {result['disease']}")
+
+        # WhatsApp এ reply পাঠাও
+        message = twilio_client.messages.create(
+            body=response_text,
+            from_="whatsapp:+14155238886",
+            to=from_number
+        )
+
+        print(f"   Reply SID: {message.sid}")
+
+        # Twilio কে acknowledge করো
+        resp = MessagingResponse()
+        resp.message(response_text)
+
+        return str(resp), 200
+
+    except Exception as e:
+        print(f"❌ Error in webhook: {str(e)}")
+
+        # Error message পাঠাও
+        try:
+            twilio_client.messages.create(
+                body="দুঃখিত, কোনো সমস্যা হয়েছে। আবার চেষ্টা করুন।",
+                from_="whatsapp:+14155238886",
+                to=from_number
+            )
+        except:
+            pass
+
+        return 'Error', 400
+
+# ==========================================
+# 5. TEST ENDPOINT (Local testing এর জন্য)
+# ==========================================
+
+@app.route('/test', methods=['GET'])
+def test():
+    """Server চলছে কিনা check করার endpoint"""
+    return {
+        'status': 'running',
+        'bot': 'AgriBot',
+        'messages_received': len(message_history),
+        'timestamp': datetime.now().isoformat()
+    }, 200
+
+# ==========================================
+# 6. MESSAGE HISTORY ENDPOINT
+# ==========================================
+
+@app.route('/history', methods=['GET'])
+def get_history():
+    """সব messages এর history দেখো"""
+    return {
+        'total_messages': len(message_history),
+        'messages': message_history[-10:]  # Last 10 messages
+    }, 200
+
+# ==========================================
+# 7. MANUAL TEST ENDPOINT
+# ==========================================
+
+@app.route('/test-message', methods=['POST'])
+def test_message():
+    """
+    Manual test করার জন্য
+    Example: POST /test-message
+    Body: {"message": "ধান গাছে রোগ হয়েছে"}
+    """
+
+    try:
+        data = request.get_json()
+        test_question = data.get('message', '')
+
+        if not test_question:
+            return {'error': 'No message provided'}, 400
+
+        # Search করো
+        result = search_knowledge_base(test_question)
+        response = format_whatsapp_response(result)
+
+        return {
+            'question': test_question,
+            'response': response,
+            'confidence': result['confidence'],
+            'disease': result['disease']
+        }, 200
+
+    except Exception as e:
+        return {'error': str(e)}, 400
+
+print("✅ Flask App created successfully!")
+print("\nAvailable endpoints:")
+print("  POST /whatsapp - WhatsApp webhook (Twilio will use this)")
+print("  GET  /test - Check if server is running")
+print("  GET  /history - View message history")
+print("  POST /test-message - Manual test")
+
+
+# Cell 16: Setup ngrok tunnel
+
+from pyngrok import ngrok
+import time
+
+print("🚀 Starting ngrok tunnel...\n")
+
+# ngrok authorize করো (free tier)
+# (First time করলে ngrok auth token দিতে হবে - optional)
+
+# ==========================================
+# IMPORTANT: তোমার ngrok authtoken এখানে দাও
+# ==========================================
+ngrok.set_auth_token("3CrcQtwtQ8lIOYAfgA0lCPwoSOF_85ZxnhkHJi2rimt3huFHo") # <-- এই লাইনটি যোগ করা হয়েছে
+
+# Flask server এর জন্য public URL তৈরি করো
+public_url = ngrok.connect(5001)
+print(f"✅ ngrok tunnel created!")
+print(f"\n🌐 Public URL: {public_url}")
+
+# URL format convert করো (ngrok এ কখনো https return করে)
+webhook_url = f"{public_url.public_url}/whatsapp"
+print(f"📍 Webhook URL: {webhook_url}")
+
+print("\n" + "="*80)
+print("IMPORTANT: এই webhook URL টি Twilio এ set করতে হবে")
+print("="*80)
+
+
+# Cell 17: Start Flask Server
+
+import threading
+
+def run_flask():
+    """Flask server চালাবার function"""
+    app.run(port=5001, debug=False, use_reloader=False)
+
+# Background thread এ Flask run করো
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+
+print("✅ Flask server started on port 5000")
+print("\nWaiting for WhatsApp messages...")
+print("\n🤖 AGRIBOT IS READY!")
+print("\nYou can now send WhatsApp messages to Twilio number")
+print("and AgriBot will respond automatically!")
+
+
+# Keep the cell running
+import time
+time.sleep(2)
+
+
+# Cell 18: Manual Testing
+
+def test_bot_response(question):
+    """
+    Bot কে manually test করো
+    """
+    print("\n" + "="*80)
+    print(f"📱 TEST MESSAGE: {question}")
+    print("="*80)
+
+    # Search করো
+    result = search_knowledge_base(question)
+
+    # Response format করো
+    response = format_whatsapp_response(result)
+
+    print(f"\n✅ BOT RESPONSE:\n{response}")
+    print("="*80)
+
+    return result
+
+# Test cases তৈরি করো
+test_cases = [
+    "ধান গাছে বাদামী দাগ পড়ছে",
+    "আলুতে রোগ হয়েছে",
+    "জৈব সার কীভাবে তৈরি করব",
+    "প্রথম সেচ কখন দিতে হয়",
+    "মাজরা পোকা দেখছি খেতে",
+    "বর্ষায় ধানের যত্ন কীভাবে",
+]
+
+print("\n🧪 RUNNING TEST CASES\n")
+
+for question in test_cases:
+    test_bot_response(question)
+    time.sleep(0.5)
+
+print("\n✅ All test cases completed!")
+
+
+# Cell 19: Language & Intent Detection
+
+def detect_intent(text):
+    """
+    প্রশ্ন থেকে intent detect করো
+    """
+    text_lower = text.lower()
+
+    # Disease keywords
+    disease_keywords = ['রোগ', 'দাগ', 'পাতা', 'শুকিয়ে', 'পড়ছে']
+
+    # Fertilizer keywords
+    fertilizer_keywords = ['সার', 'তৈরি', 'ব্যবহার', 'দেব', 'খোল']
+
+    # Pest keywords
+    pest_keywords = ['পোকা', 'কীড়া', 'ছিদ্র', 'দমন', 'দেখছি']
+
+    # Irrigation keywords
+    irrigation_keywords = ['সেচ', 'পানি', 'দিতে', 'জমি', 'নিকাশ']
+
+    # Count matches
+    disease_count = sum(1 for kw in disease_keywords if kw in text_lower)
+    fertilizer_count = sum(1 for kw in fertilizer_keywords if kw in text_lower)
+    pest_count = sum(1 for kw in pest_keywords if kw in text_lower)
+    irrigation_count = sum(1 for kw in irrigation_keywords if kw in text_lower)
+
+    # Determine intent
+    intents = {
+        'Disease': disease_count,
+        'Fertilizer': fertilizer_count,
+        'Pest': pest_count,
+        'Irrigation': irrigation_count
+    }
+
+    if max(intents.values()) == 0:
+        return 'General', 0
+
+    detected_intent = max(intents, key=intents.get)
+    confidence = intents[detected_intent] / sum(intents.values())
+
+    return detected_intent, confidence
+
+# Test করো
+test_questions = [
+    "ধান গাছে বাদামী দাগ পড়ছে?",
+    "জৈব সার তৈরি করব?",
+    "মাজরা পোকা       দেখছি?",
+]
+
+print("🔍 INTENT DETECTION TEST\n")
+for q in test_questions:
+    intent, conf = detect_intent(q)
+    print(f"Q: {q}")
+    print(f"Intent: {intent} ({conf:.0%})\n")
+
+
+# Cell 20: Response Logging & Analytics
+
+import json
+from datetime import datetime
+
+class AgriBotLogger:
+    """AgriBot responses log করার class"""
+
+    def __init__(self):
+        self.logs = []
+
+    def log_interaction(self, from_number, question, result, response):
+        """Interaction log করো"""
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'from_number': from_number,
+            'question': question,
+            'disease_detected': result.get('disease', 'Unknown'),
+            'confidence': result.get('confidence', 0.0),
+            'category': result.get('category', 'General'),
+            'response_length': len(response),
+            'intent': detect_intent(question)[0]
+        }
+        self.logs.append(log_entry)
+        return log_entry
+
+    def get_stats(self):
+        """Statistics দেখো"""
+        if not self.logs:
+            return {'total': 0}
+
+        total = len(self.logs)
+        avg_confidence = sum(log['confidence'] for log in self.logs) / total
+
+        # Category distribution
+        categories = {}
+        for log in self.logs:
+            cat = log['category']
+            categories[cat] = categories.get(cat, 0) + 1
+
+        return {
+            'total_interactions': total,
+            'avg_confidence': avg_confidence,
+            'category_distribution': categories
+        }
+
+    def export_logs(self, filename='agribot_logs.json'):
+        """Logs export করো"""
+        with open(f'/content/{filename}', 'w', encoding='utf-8') as f:
+            json.dump(self.logs, f, ensure_ascii=False, indent=2)
+        print(f"✅ Logs exported to {filename}")
+
+# Logger initialize করো
+bot_logger = AgriBotLogger()
+
+print("✅ Logger initialized!")
+
+
+
+#cell 21
+import pandas as pd
+import numpy as np
+import pickle
+import scipy.sparse
+from sklearn.metrics.pairwise import cosine_similarity
+import warnings
+warnings.filterwarnings('ignore')
+
+# Redefine format_whatsapp_response to ensure it's available
+def format_whatsapp_response(result):
+    """
+    WhatsApp এর জন্য response format করো
+    """
+
+    confidence_emoji = "🟢" if result['confidence'] > 0.7 else "🟡"
+
+    response = f"""
+{confidence_emoji} *সমস্যা:* {result['disease']}
+📊 *বিশ্বাসযোগ্যতা:* {result['confidence']:.0%}
+
+💡 *পরামর্শ:*
+{result['answer']}
+
+_এটি AI সহায়তা। গুরুতর সমস্যায় কৃষি অফিসে যোগাযোগ করুন।_
+"""
+    return response.strip()
+
+# Cell 21: Statistics & Dashboard
+
+def get_bot_statistics():
+    """Bot এর সব statistics দেখো"""
+
+    stats = bot_logger.get_stats()
+
+    print("\n" + "="*80)
+    print("📊 AGRIBOT STATISTICS")
+    print("="*80)
+
+    print(f"\n📱 Total Interactions: {stats['total_interactions']}")
+    print(f"📈 Average Confidence: {stats['avg_confidence']:.0%}")
+
+    print(f"\n📂 Category Distribution:")
+    for category, count in stats['category_distribution'].items():
+        print(f"   • {category}: {count}")
+
+    print("\n" + "="*80)
+
+# Demo: কিছু interactions simulate করো
+print("Simulating some interactions...\n")
+
+demo_questions = [
+    "ধান গাছে বাদামী দাগ পড়ছে?",
+    "জৈব সার তৈরি করতে চাই?",
+    "মাজরা পোকা দমন করব কীভাবে?",
+]
+
+for question in demo_questions:
+    result = search_knowledge_base(question)
+    response = format_whatsapp_response(result)
+
+    # Log করো
+    bot_logger.log_interaction(
+        from_number="whatsapp:+880123456789",
+        question=question,
+        result=result,
+        response=response
+    )
+
+# Statistics দেখো
+get_bot_statistics()
+
+# Logs export করো
+bot_logger.export_logs()
+
+
+# Cell 22: Docker Setup (for future deployment)
+
+dockerfile_content = """
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application files
+COPY . .
+
+# Expose port
+EXPOSE 5000
+
+# Run Flask app
+CMD ["python", "-c", "from __main__ import app; app.run(host='0.0.0.0', port=5000)"]
+"""
+
+requirements_content = """
+pandas==1.5.0
+numpy==1.23.0
+scikit-learn==1.1.0
+twilio==8.2.0
+flask==2.2.0
+python-dotenv==0.20.0
+pyngrok==5.1.0
+scipy==1.9.0
+"""
+
+# Docker files save করো
+with open('/content/Dockerfile', 'w') as f:
+    f.write(dockerfile_content)
+
+with open('/content/requirements.txt', 'w') as f:
+    f.write(requirements_content)
+
+print("✅ Docker files created!")
+print("   - Dockerfile")
+print("   - requirements.txt")
+
+
+
+# Cell 23: Complete Bot Handler Function
+
+def handle_farmer_message(farmer_question, from_number="whatsapp:+880123456789"):
+    """
+    একটি farmer এর message handle করো - সম্পূর্ণ process
+
+    Steps:
+    1. Question clean করো
+    2. Knowledge base এ search করো
+    3. Response format করো
+    4. Logging করো
+    5. Return করো
+    """
+
+    print(f"\n{'='*80}")
+    print(f"🌾 PROCESSING FARMER MESSAGE")
+    print(f"{'='*80}")
+
+    try:
+        # Step 1: Input validation
+        if not farmer_question or len(farmer_question.strip()) == 0:
+            return {
+                'status': 'error',
+                'message': 'প্রশ্ন খালি আছে'
+            }
+
+        print(f"\n📱 From: {from_number}")
+        print(f"📝 Question: {farmer_question}")
+
+        # Step 2: Intent detection
+        intent, intent_confidence = detect_intent(farmer_question)
+        print(f"🎯 Detected Intent: {intent} ({intent_confidence:.0%})")
+
+        # Step 3: Knowledge base search
+        result = search_knowledge_base(farmer_question)
+        print(f"🔍 Search Result:")
+        print(f"   • Disease: {result['disease']}")
+        print(f"   • Category: {result['category']}")
+        print(f"   • Confidence: {result['confidence']:.0%}")
+
+        # Step 4: Format response
+        response = format_whatsapp_response(result)
+        print(f"\n💬 Response:\n{response}")
+
+        # Step 5: Log the interaction
+        log_entry = bot_logger.log_interaction(
+            from_number=from_number,
+            question=farmer_question,
+            result=result,
+            response=response
+        )
+
+        print(f"\n✅ Interaction logged")
+        print(f"{'='*80}")
+
+        return {
+            'status': 'success',
+            'message': response,
+            'result': result,
+            'log': log_entry
+        }
+
+    except Exception as e:
+        print(f"\n❌ Error: {str(e)}")
+        return {
+            'status': 'error',
+            'message': f'Error occurred: {str(e)}'
+        }
+
+# Test করো
+print("\n🧪 TESTING COMPLETE BOT HANDLER\n")
+
+test_farmers = [
+    "ধান গাছে বাদামী দাগ হয়েছে?",
+    "জৈব সার কীভাবে তৈরি করব?",
+    "সেচ দেওয়ার সঠিক সময় কী??",
+]
+
+for question in test_farmers:
+    result = handle_farmer_message(question)
+    time.sleep(0.5)
+
+
+# Cell 27: Install & Setup Sentence-BERT
+
+!pip install sentence-transformers
+!pip install scikit-learn
+
+print("✅ Libraries installed!")
+
+
+# Cell 28: Advanced NLP Engine - Sentence-BERT
+
+from sentence_transformers import SentenceTransformer, util
+import torch
+
+print("🚀 Loading Sentence-BERT model (এটি ১ মিনিট সময় নেবে)...\n")
+
+# Multilingual Sentence-BERT model (Bengali support করে)
+# এটি 46টি language support করে, Bengali সহ
+model_name = 'distiluse-base-multilingual-cased-v2'
+sbert_model = SentenceTransformer(model_name)
+
+print("✅ Sentence-BERT Model Loaded!")
+
+# Knowledge base এর সব প্রশ্ন encode করো
+print("\n🔄 Encoding knowledge base questions...\n")
+
+questions = kb['Question'].tolist()
+question_embeddings = sbert_model.encode(questions, convert_to_tensor=True, show_progress_bar=True)
+
+print(f"\n✅ Encoded {len(question_embeddings)} questions")
+print(f"   Embedding dimension: {question_embeddings.shape}")
+
+#cell 29
+
+from sentence_transformers import SentenceTransformer, util
+import numpy as np
+import torch
+
+# Check for GPU and set device
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+print(f"Using device: {device}")
+
+model_name = 'paraphrase-multilingual-MiniLM-L12-v2' # এটি বাংলার জন্য ভালো কাজ করে
+sbert_model = SentenceTransformer(model_name).to(device) # Move model to device
+
+# question_embeddings এর সংজ্ঞা এখানে নিয়ে আসা হয়েছে
+# Ensure question_embeddings is a tensor and on the correct device
+question_embeddings = sbert_model.encode(kb['Cleaned_Question'].tolist(), convert_to_tensor=True, show_progress_bar=True).to(device)
+print("✅ Sentence-BERT মডেল এবং এম্বেডিং তৈরি সম্পন্ন!")
+
+def advanced_search(farmer_question, top_k=3):
+    """
+    Sentence-BERT ব্যবহার করে semantic search করো
+
+    Returns top 3 candidates with scores
+    """
+
+    # Encode farmer এর প্রশ্ন এবং নিশ্চিত করো এটি সঠিক ডিভাইসে আছে
+    query_embedding = sbert_model.encode(farmer_question, convert_to_tensor=True).to(device)
+
+    # Calculate cosine similarity
+    cos_scores = util.cos_sim(query_embedding, question_embeddings)[0]
+    cos_scores = cos_scores.cpu().numpy() # Move back to CPU for numpy operations
+
+    # Get top K
+    top_results = np.argsort(cos_scores)[-top_k:][::-1]
+
+    results = []
+    for idx in top_results:
+        result = {
+            'index': int(idx),
+            'question': kb.iloc[idx]['Question'],
+            'answer': kb.iloc[idx]['Answer'],
+            'disease': kb.iloc[idx]['Disease_Name'],
+            'category': kb.iloc[idx]['Category'],
+            'confidence': float(cos_scores[idx])
+        }
+        results.append(result)
+
+    return results
+
+# Test করো
+test_questions = [
+    "ধান গাছে বাদামী দাগ হয়েছে?",
+    "আলুতে তুলা রোগ",
+    "সার দেওয়ার সময়?",
+]
+
+print("=" * 80)
+print("🔍 SENTENCE-BERT SEARCH TEST")
+print("=" * 80)
+
+for question in test_questions:
+    print(f"\n📱 Question: {question}")
+    results = advanced_search(question, top_k=3)
+
+    for i, result in enumerate(results, 1):
+        print(f"\n   Result {i}:")
+        print(f"   • Match: {result['question']}")
+        print(f"   • Disease: {result['disease']}")
+        print(f"   • Confidence: {result['confidence']:.2%}")
+
+
+# Cell 30: Comparison - TF-IDF vs Sentence-BERT
+
+def search_tfidf_old(farmer_question):
+    """Day 2 এর TF-IDF search"""
+
+    # The clean_bengali_text function is already available from previous cells.
+    # from agribot_knowledge_base import clean_bengali_text # This line caused the error
+
+    cleaned_question = clean_bengali_text(farmer_question)
+    question_vector = vectorizer.transform([cleaned_question])
+    similarities = cosine_similarity(question_vector, question_vectors)[0]
+    best_idx = np.argmax(similarities)
+
+    return {
+        'disease': kb.iloc[best_idx]['Disease_Name'],
+        'confidence': float(similarities[best_idx])
+    }
+
+def search_sbert_new(farmer_question):
+    """Day 3 এর Sentence-BERT search"""
+
+    results = advanced_search(farmer_question, top_k=1)
+    return {
+        'disease': results[0]['disease'],
+        'confidence': results[0]['confidence']
+    }
+
+# Test cases
+test_cases = [
+    "ধান গাছে বাদামী দাগ হয়েছে?",
+    "আলু গাছে পাতা কুঁকড়ে?",
+    "জৈব সার কীভাবে তৈরি?",
+    "মাজরা পোকা দমন?",
+    "বর্ষায় ধানের যত্ন?",
+]
+
+print("\n" + "=" * 100)
+print("📊 COMPARISON: TF-IDF vs Sentence-BERT")
+print("=" * 100)
+
+comparison_results = []
+
+for question in test_cases:
+    tfidf_result = search_tfidf_old(question)
+    sbert_result = search_sbert_new(question)
+
+    improvement = (sbert_result['confidence'] - tfidf_result['confidence']) * 100
+
+    comparison_results.append({
+        'question': question[:30] + '...',
+        'tfidf_conf': tfidf_result['confidence'],
+        'sbert_conf': sbert_result['confidence'],
+        'improvement': improvement
+    })
+
+    print(f"\n📱 Q: {question}")
+    print(f"   TF-IDF:       {tfidf_result['confidence']:.2%}")
+    print(f"   Sentence-BERT: {sbert_result['confidence']:.2%}")
+    print(f"   Improvement:   {improvement:+.2f}%")
+
+# Summary
+print("\n" + "=" * 100)
+avg_improvement = np.mean([r['improvement'] for r in comparison_results])
+print(f"📈 Average Improvement: {avg_improvement:+.2f}%")
+print("=" * 100)
+
+
+# Cell 31: Install Computer Vision Libraries
+
+!pip install opencv-python
+!pip install torchvision
+!pip install pillow
+!pip install matplotlib
+
+print("✅ Computer Vision libraries installed!")
+
+#cell 32
+import os
+
+base = "/kaggle/input/datasets/haiderrabbi"
+print(os.listdir(base))
+
+#cell 33
+import os
+
+base = "/kaggle/input/datasets/haiderrabbi/details"
+print(os.listdir(base))
+
+
+#cell 34
+"""
+ResNet50 Plant Disease Classification - REAL-WORLD ROBUST VERSION
+==================================================================
+বাইরের যেকোনো ছবিতে কাজ করার জন্য উন্নত করা হয়েছে:
+
+  ✅ Test Time Augmentation (TTA) - বাইরের ছবিতে accuracy বাড়ায়
+  ✅ Real-world augmentation - blur, noise, JPEG artifacts দিয়ে train
+  ✅ Gradual unfreezing - epoch বাড়লে আরো layer fine-tune হয়
+  ✅ Confidence threshold - অনিশ্চিত হলে জানাবে
+  ✅ Label smoothing - overconfidence কমায়
+  ✅ Simple prediction API - যেকোনো ছবি path দিলেই কাজ করে
+"""
+
+import os
+import json
+import warnings
+from pathlib import Path
+from typing import Tuple, Dict, List, Optional
+
+import numpy as np
+import torch
+import torch.nn as nn
+import kagglehub
+from torch.cuda.amp import autocast, GradScaler
+from tqdm import tqdm
+from sklearn.utils.class_weight import compute_class_weight
+from torchvision import datasets, models, transforms
+from torch.utils.data import DataLoader, random_split, Subset
+
+warnings.filterwarnings('ignore')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+class Config:
+    DATASET_NAME = "emmarex/plantdisease"
+    TRAIN_VAL_SPLIT = 0.8
+    BATCH_SIZE = 64
+    NUM_WORKERS = 8
+    PREFETCH_FACTOR = 2
+    PERSISTENT_WORKERS = True
+    PIN_MEMORY = True
+
+    NUM_EPOCHS = 2
+    LEARNING_RATE_BACKBONE = 1e-4
+    LEARNING_RATE_HEAD = 1e-3
+    LR_SCHEDULER_STEP = 3
+    LR_SCHEDULER_GAMMA = 0.5
+
+    # Mixed precision
+    USE_MIXED_PRECISION = True
+
+    # ✅ NEW: Confidence threshold - এর নিচে হলে "অনিশ্চিত" বলবে
+    CONFIDENCE_THRESHOLD = 0.60
+
+    # ✅ NEW: TTA (Test Time Augmentation) - কতবার augment করে predict করবে
+    TTA_STEPS = 5
+
+    # ✅ NEW: Label smoothing - overconfidence কমায়
+    LABEL_SMOOTHING = 0.1
+
+    # Paths
+    WORK_DIR = Path.home() / "plant_disease_model"
+    MODEL_PATH = WORK_DIR / "resnet50_best.pth"
+    CHECKPOINT_PATH = WORK_DIR / "checkpoint_latest.pth"
+    CLASS_MAPPING_PATH = WORK_DIR / "class_mapping.json"
+    METRICS_PATH = WORK_DIR / "training_metrics.json"
+
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DATA LOADING - REAL-WORLD ROBUST AUGMENTATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+class DataManager:
+    def __init__(self, config: Config):
+        self.config = config
+        self.train_loader = None
+        self.val_loader = None
+        self.class_weights = None
+        self.num_classes = None
+
+    def download_dataset(self) -> Path:
+        print("📥 Downloading PlantVillage dataset from KaggleHub...")
+        try:
+            path = Path(kagglehub.dataset_download(self.config.DATASET_NAME))
+            dataset_path = path / "PlantVillage" if (path / "PlantVillage").exists() else path
+            if not dataset_path.exists():
+                raise FileNotFoundError(f"Dataset not found at {dataset_path}")
+            print(f"✅ Dataset Path: {dataset_path}")
+            return dataset_path
+        except Exception as e:
+            print(f"❌ Error downloading dataset: {e}")
+            raise
+
+    def get_transforms(self) -> Tuple[transforms.Compose, transforms.Compose]:
+        """
+        ✅ IMPROVED: Real-world conditions simulate করার জন্য augmentation:
+        - GaussianBlur: ফোন ক্যামেরার blur handle করে
+        - RandomGrayscale: বিভিন্ন আলোর condition
+        - RandomPerspective: আঁকাবাঁকা angle থেকে তোলা ছবি
+        - ColorJitter: বেশি variation - বিভিন্ন আলো/ছায়ায় তোলা ছবি
+        """
+        train_tf = transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.RandomCrop(224),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomVerticalFlip(p=0.2),
+            transforms.RandomRotation(degrees=30),
+
+            # ✅ Real-world conditions
+            transforms.ColorJitter(
+                brightness=0.4, contrast=0.4,
+                saturation=0.4, hue=0.1
+            ),
+            transforms.RandomGrayscale(p=0.05),
+            transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+            transforms.RandomPerspective(distortion_scale=0.3, p=0.3),
+
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]
+            ),
+
+            # ✅ JPEG artifact simulate করে (ফোনের compressed ছবি)
+            transforms.RandomErasing(p=0.1, scale=(0.02, 0.08)),
+        ])
+
+        val_tf = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225]
+            )
+        ])
+
+        return train_tf, val_tf
+
+    def get_tta_transforms(self) -> List[transforms.Compose]:
+        """
+        ✅ NEW: Test Time Augmentation transforms
+        Prediction এর সময় ছবিকে বিভিন্নভাবে augment করে
+        সব prediction এর average নেয় → বাইরের ছবিতে accuracy বাড়ে
+        """
+        base = [
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ]
+
+        tta_list = [
+            # Original
+            transforms.Compose(base),
+            # Horizontal flip
+            transforms.Compose([transforms.RandomHorizontalFlip(p=1.0)] + base),
+            # Slight rotation
+            transforms.Compose([transforms.RandomRotation(degrees=(10, 10))] + base),
+            # Center crop
+            transforms.Compose([transforms.Resize(256), transforms.CenterCrop(224)] + base[1:]),
+            # Brightness adjusted
+            transforms.Compose([transforms.ColorJitter(brightness=0.3)] + base),
+        ]
+
+        return tta_list
+
+    def load_data(self) -> Tuple[DataLoader, DataLoader]:
+        print("\n📊 Loading Dataset...")
+
+        dataset_path = self.download_dataset()
+        train_tf, val_tf = self.get_transforms()
+
+        full_dataset = datasets.ImageFolder(dataset_path)
+        self.num_classes = len(full_dataset.classes)
+
+        print(f"✅ Classes found: {self.num_classes}")
+
+        self.config.WORK_DIR.mkdir(parents=True, exist_ok=True)
+        class_mapping = {idx: name for name, idx in full_dataset.class_to_idx.items()}
+
+        with open(self.config.CLASS_MAPPING_PATH, 'w') as f:
+            json.dump(class_mapping, f, indent=2)
+        print(f"💾 Class mapping saved to {self.config.CLASS_MAPPING_PATH}")
+
+        self._calculate_class_weights(full_dataset)
+
+        train_size = int(self.config.TRAIN_VAL_SPLIT * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+
+        train_indices, val_indices = random_split(
+            range(len(full_dataset)),
+            [train_size, val_size],
+            generator=torch.Generator().manual_seed(42)
+        )
+
+        train_dataset = datasets.ImageFolder(dataset_path, transform=train_tf)
+        train_dataset = Subset(train_dataset, train_indices.indices)
+
+        val_dataset = datasets.ImageFolder(dataset_path, transform=val_tf)
+        val_dataset = Subset(val_dataset, val_indices.indices)
+
+        self.train_loader = DataLoader(
+            train_dataset, batch_size=self.config.BATCH_SIZE, shuffle=True,
+            num_workers=self.config.NUM_WORKERS, prefetch_factor=self.config.PREFETCH_FACTOR,
+            persistent_workers=self.config.PERSISTENT_WORKERS, pin_memory=True, drop_last=True
+        )
+
+        self.val_loader = DataLoader(
+            val_dataset, batch_size=self.config.BATCH_SIZE, shuffle=False,
+            num_workers=self.config.NUM_WORKERS, prefetch_factor=self.config.PREFETCH_FACTOR,
+            persistent_workers=self.config.PERSISTENT_WORKERS, pin_memory=True
+        )
+
+        print(f"✅ Train: {len(train_dataset)} | Val: {len(val_dataset)}")
+        return self.train_loader, self.val_loader
+
+    def _calculate_class_weights(self, dataset):
+        print("\n⚖️ Calculating class weights...")
+        labels = np.array([y for _, y in dataset.imgs])
+        class_weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
+        self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MODEL - GRADUAL UNFREEZING
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ModelBuilder:
+    @staticmethod
+    def build_model(num_classes: int, config: Config) -> nn.Module:
+        print("\n🏗️ Building ResNet50 Model...")
+
+        model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        print("✅ Loaded pretrained ResNet50 (ImageNet weights)")
+
+        # শুরুতে প্রথম 3 layer freeze করো
+        ModelBuilder._freeze_layers(model, num_to_freeze=3)
+
+        in_features = model.fc.in_features
+        # ✅ Dropout যোগ করা হয়েছে - overfitting কমাবে, real-world এ ভালো করবে
+        model.fc = nn.Sequential(
+            nn.Dropout(p=0.3),
+            nn.Linear(in_features, num_classes)
+        )
+        print(f"✅ FC layer with Dropout: {in_features} → {num_classes}")
+
+        return model.to(config.DEVICE)
+
+    @staticmethod
+    def _freeze_layers(model: nn.Module, num_to_freeze: int):
+        all_layers = [model.conv1, model.bn1, model.layer1, model.layer2, model.layer3]
+
+        # সব unfreeze করো আগে
+        for layer in all_layers:
+            for param in layer.parameters():
+                param.requires_grad = True
+
+        # তারপর নির্দিষ্ট কয়টা freeze করো
+        for layer in all_layers[:num_to_freeze]:
+            for param in layer.parameters():
+                param.requires_grad = False
+
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in model.parameters())
+        print(f"🔒 Frozen: {num_to_freeze} layers | Trainable: {trainable:,}/{total:,}")
+
+    @staticmethod
+    def gradual_unfreeze(model: nn.Module, epoch: int):
+        """
+        ✅ NEW: Gradual Unfreezing Strategy
+        Epoch বাড়ার সাথে সাথে আরো layer unfreeze করা হয়:
+        - Epoch 0-7:  layer1, layer2, layer3 frozen
+        - Epoch 8-14: layer3 unfreeze
+        - Epoch 15+:  layer2 unfreeze (সব layer fine-tune)
+        এতে early layer এর pretrained features নষ্ট হয় না।
+        """
+        if epoch == 8:
+            for param in model.layer3.parameters():
+                param.requires_grad = True
+            print("🔓 Epoch 8: layer3 unfreeze করা হলো")
+
+        elif epoch == 15:
+            for param in model.layer2.parameters():
+                param.requires_grad = True
+            print("🔓 Epoch 15: layer2 unfreeze করা হলো")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TRAINING - LABEL SMOOTHING + GRADUAL UNFREEZE
+# ═══════════════════════════════════════════════════════════════════════════
+
+class Trainer:
+    def __init__(self, model: nn.Module, config: Config, class_weights: Optional[torch.Tensor] = None):
+        self.model = model
+        self.config = config
+        self.device = config.DEVICE
+
+        # ✅ Label smoothing - model কে কম overconfident বানায়
+        # বাইরের ছবিতে ভুল হলেও confidence কম থাকবে → threshold কাজ করবে
+        self.criterion = nn.CrossEntropyLoss(
+            weight=class_weights.to(self.device) if class_weights is not None else None,
+            label_smoothing=config.LABEL_SMOOTHING
+        )
+
+        self.optimizer = torch.optim.AdamW([
+            {"params": model.layer4.parameters(), "lr": config.LEARNING_RATE_BACKBONE},
+            {"params": model.fc.parameters(), "lr": config.LEARNING_RATE_HEAD}
+        ], weight_decay=1e-4)
+
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=config.NUM_EPOCHS, eta_min=1e-6
+        )
+
+        self.use_amp = config.USE_MIXED_PRECISION
+        self.scaler = GradScaler() if self.use_amp else None
+
+        self.metrics = {
+            'train_loss': [], 'train_acc': [],
+            'val_loss': [], 'val_acc': [],
+            'best_val_acc': 0.0, 'best_epoch': 0
+        }
+
+    def train_epoch(self, train_loader) -> Tuple[float, float]:
+        self.model.train()
+        total_loss, correct, total = 0.0, 0, 0
+
+        pbar = tqdm(train_loader, desc="Training", leave=False)
+
+        for images, labels in pbar:
+            images, labels = images.to(self.device), labels.to(self.device)
+            self.optimizer.zero_grad()
+
+            if self.use_amp:
+                with autocast():
+                    outputs = self.model(images)
+                    loss = self.criterion(outputs, labels)
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                outputs = self.model(images)
+                loss = self.criterion(outputs, labels)
+                loss.backward()
+                self.optimizer.step()
+
+            total_loss += loss.item()
+            _, preds = torch.max(outputs.detach(), 1)
+            correct += (preds == labels).sum().item()
+            total += labels.size(0)
+
+            pbar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{100*correct/total:.2f}%'})
+
+        return total_loss / len(train_loader), 100 * correct / total
+
+    def validate_epoch(self, val_loader) -> Tuple[float, float]:
+        self.model.eval()
+        total_loss, correct, total = 0.0, 0, 0
+
+        with torch.no_grad():
+            for images, labels in tqdm(val_loader, desc="Validation", leave=False):
+                images, labels = images.to(self.device), labels.to(self.device)
+
+                if self.use_amp:
+                    with autocast():
+                        outputs = self.model(images)
+                        loss = self.criterion(outputs, labels)
+                else:
+                    outputs = self.model(images)
+                    loss = self.criterion(outputs, labels)
+
+                total_loss += loss.item()
+                _, preds = torch.max(outputs, 1)
+                correct += (preds == labels).sum().item()
+                total += labels.size(0)
+
+        return total_loss / len(val_loader), 100 * correct / total
+
+    def train(self, train_loader, val_loader) -> Dict:
+        print("\n🚀 Starting Training...\n")
+
+        for epoch in range(self.config.NUM_EPOCHS):
+            print(f"\n[Epoch {epoch+1}/{self.config.NUM_EPOCHS}]")
+
+            # ✅ Gradual unfreeze - নির্দিষ্ট epoch এ layer খুলে দেয়
+            ModelBuilder.gradual_unfreeze(self.model, epoch)
+
+            train_loss, train_acc = self.train_epoch(train_loader)
+            val_loss, val_acc = self.validate_epoch(val_loader)
+
+            self.metrics['train_loss'].append(train_loss)
+            self.metrics['train_acc'].append(train_acc)
+            self.metrics['val_loss'].append(val_loss)
+            self.metrics['val_acc'].append(val_acc)
+
+            self.scheduler.step()
+            lr = self.optimizer.param_groups[0]['lr']
+
+            print(f"  Train → Loss: {train_loss:.4f} | Acc: {train_acc:.2f}%")
+            print(f"  Val   → Loss: {val_loss:.4f} | Acc: {val_acc:.2f}%")
+            print(f"  LR: {lr:.6f}")
+
+            if val_acc > self.metrics['best_val_acc']:
+                self.metrics['best_val_acc'] = val_acc
+                self.metrics['best_epoch'] = epoch + 1
+                torch.save(self.model.state_dict(), self.config.MODEL_PATH)
+                print(f"  💾 Best model saved! ({val_acc:.2f}%)")
+
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'metrics': self.metrics
+            }, self.config.CHECKPOINT_PATH)
+
+        print(f"\n✅ Training done! Best: {self.metrics['best_val_acc']:.2f}% (Epoch {self.metrics['best_epoch']})")
+
+        with open(self.config.METRICS_PATH, 'w') as f:
+            json.dump(self.metrics, f, indent=2)
+
+        return self.metrics
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PREDICTOR - TTA + CONFIDENCE THRESHOLD
+# ═══════════════════════════════════════════════════════════════════════════
+
+class Predictor:
+    """
+    ✅ IMPROVED Predictor:
+    - TTA: একই ছবি multiple augmentation দিয়ে predict করে average নেয়
+    - Confidence threshold: নিশ্চিত না হলে 'UNCERTAIN' দেয়
+    - Top-3 results: সম্ভাব্য সব disease দেখায়
+    """
+
+    def __init__(self, model: nn.Module, config: Config, class_mapping: Dict):
+        self.model = model
+        self.device = config.DEVICE
+        self.config = config
+        self.class_mapping = class_mapping
+
+        dm = DataManager(config)
+        self.tta_transforms = dm.get_tta_transforms()
+        _, self.simple_transform = dm.get_transforms()
+
+    @staticmethod
+    def load_model(config: Config, num_classes: int) -> nn.Module:
+        if not config.MODEL_PATH.exists():
+            raise FileNotFoundError(f"Model not found at {config.MODEL_PATH}")
+
+        model = ModelBuilder.build_model(num_classes, config)
+        state_dict = torch.load(config.MODEL_PATH, map_location=config.DEVICE)
+        model.load_state_dict(state_dict)
+        print(f"✅ Model loaded from {config.MODEL_PATH}")
+        return model
+
+    def predict_image(self, image_path: str, use_tta: bool = True) -> Dict:
+        """
+        একটি ছবি থেকে disease predict করো।
+
+        Returns:
+            {
+                'disease': 'Tomato___Early_blight',
+                'confidence': 0.87,
+                'status': 'confident' / 'uncertain',
+                'top3': [('disease1', 0.87), ('disease2', 0.08), ('disease3', 0.05)]
+            }
+        """
+        from PIL import Image
+
+        if not Path(image_path).exists():
+            raise FileNotFoundError(f"ছবি পাওয়া যায়নি: {image_path}")
+
+        image = Image.open(image_path).convert('RGB')
+        self.model.eval()
+
+        with torch.no_grad():
+            if use_tta:
+                # ✅ TTA: সব augmentation দিয়ে predict করো, average নাও
+                all_probs = []
+                for tf in self.tta_transforms:
+                    tensor = tf(image).unsqueeze(0).to(self.device)
+                    if self.config.USE_MIXED_PRECISION:
+                        with autocast():
+                            output = self.model(tensor)
+                    else:
+                        output = self.model(tensor)
+                    probs = torch.softmax(output, dim=1)
+                    all_probs.append(probs)
+
+                # সব prediction এর average
+                avg_probs = torch.stack(all_probs).mean(0)
+            else:
+                tensor = self.simple_transform(image).unsqueeze(0).to(self.device)
+                output = self.model(tensor)
+                avg_probs = torch.softmax(output, dim=1)
+
+        # Top-3 results
+        top3_conf, top3_idx = torch.topk(avg_probs, 3, dim=1)
+        top3_conf = top3_conf.squeeze().cpu().numpy()
+        top3_idx = top3_idx.squeeze().cpu().numpy()
+
+        top3 = [
+            (self.class_mapping[str(int(idx))], float(conf))
+            for idx, conf in zip(top3_idx, top3_conf)
+        ]
+
+        best_disease, best_conf = top3[0]
+
+        # ✅ Confidence threshold check
+        status = "confident" if best_conf >= self.config.CONFIDENCE_THRESHOLD else "uncertain"
+
+        return {
+            'disease': best_disease,
+            'confidence': best_conf,
+            'confidence_pct': f"{best_conf*100:.1f}%",
+            'status': status,
+            'top3': top3,
+            'tta_used': use_tta
+        }
+
+    def predict_from_url_or_path(self, source: str) -> Dict:
+        """URL বা local path থেকে predict করো"""
+        import tempfile
+
+        if source.startswith("http"):
+            import urllib.request
+            print(f"🌐 Downloading image from URL...")
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                urllib.request.urlretrieve(source, tmp.name)
+                return self.predict_image(tmp.name)
+        else:
+            return self.predict_image(source)
+
+    def predict_batch(self, image_paths: List[str]) -> List[Dict]:
+        results = []
+        for img_path in tqdm(image_paths, desc="Predicting"):
+            try:
+                result = self.predict_image(img_path)
+                results.append(result)
+                print(f"  {Path(img_path).name}: {result['disease']} ({result['confidence_pct']}) [{result['status']}]")
+            except Exception as e:
+                print(f"❌ Error: {img_path}: {e}")
+                results.append({'error': str(e)})
+        return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN PIPELINE
+# ═══════════════════════════════════════════════════════════════════════════
+
+def main():
+    print("=" * 70)
+    print("🌱 ResNet50 Plant Disease - REAL-WORLD ROBUST Version")
+    print("=" * 70)
+    print(f"Device: {Config.DEVICE}")
+    print(f"TTA Steps: {Config.TTA_STEPS}")
+    print(f"Confidence Threshold: {Config.CONFIDENCE_THRESHOLD}")
+    print(f"Label Smoothing: {Config.LABEL_SMOOTHING}")
+    print("=" * 70)
+
+    # ── Data ──
+    data_manager = DataManager(Config)
+    train_loader, val_loader = data_manager.load_data()
+
+    # ── Model ──
+    model = ModelBuilder.build_model(data_manager.num_classes, Config)
+
+    # ── Train ──
+    trainer = Trainer(model, Config, data_manager.class_weights)
+    metrics = trainer.train(train_loader, val_loader)
+
+    print(f"\n📈 Best Val Accuracy: {metrics['best_val_acc']:.2f}% (Epoch {metrics['best_epoch']})")
+    print(f"✅ সব ফাইল সেভ হয়েছে: {Config.WORK_DIR}")
+    print("=" * 70)
+
+
+def predict_single_image(image_path: str):
+    """
+    Training শেষে যেকোনো ছবি দিয়ে test করার জন্য।
+    
+    ব্যবহার:
+        predict_single_image("/path/to/your/tomato_photo.jpg")
+    """
+    if not Config.CLASS_MAPPING_PATH.exists():
+        print("❌ আগে training করতে হবে (main() চালাও)")
+        return
+
+    with open(Config.CLASS_MAPPING_PATH) as f:
+        class_mapping = json.load(f)
+
+    num_classes = len(class_mapping)
+    model = Predictor.load_model(Config, num_classes)
+    predictor = Predictor(model, Config, class_mapping)
+
+    print(f"\n🔍 Predicting: {image_path}")
+    result = predictor.predict_from_url_or_path(image_path)
+
+    print("\n" + "─" * 40)
+    print(f"🌿 Disease: {result['disease']}")
+    print(f"📊 Confidence: {result['confidence_pct']}")
+    print(f"{'✅ নিশ্চিত' if result['status'] == 'confident' else '⚠️  অনিশ্চিত - আবার চেষ্টা করো'}")
+    print("\nTop 3 সম্ভাবনা:")
+    for i, (disease, conf) in enumerate(result['top3'], 1):
+        print(f"  {i}. {disease}: {conf*100:.1f}%")
+    print("─" * 40)
+
+    return result
+
+
+if __name__ == "__main__":
+    main()
+    
+#cell 35
+
+import shutil
+import os
+
+dst = "/kaggle/working/plant_disease_model"
+
+if os.path.exists(dst):
+    shutil.rmtree(dst)   # পুরানো delete
+
+shutil.copytree("/root/plant_disease_model", dst)
+
+# Cell 32: Plant Disease Detection — ResNet50 (FIXED)
+# সব bug fix করা হয়েছে:
+# ১. disease_classes এখন ImageFolder এর alphabetical order অনুযায়ী
+# ২. model এর num_classes dataset থেকে auto-detect হবে
+# ৩. trained model load করার logic আছে
+
+import torch
+import torch.nn as nn
+from torchvision import transforms, models
+from PIL import Image
+import os
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"✅ Device: {device}")
+
+# ─── ImageFolder alphabetical order অনুযায়ী সঠিক class mapping ──────────
+# এই order টি sorted(os.listdir(dataset_path)) এর সাথে মিলবে
+disease_classes = {
+    0:  "Pepper Bell Bacterial Spot",
+    1:  "Pepper Bell Healthy",
+    2:  "Potato Early Blight",
+    3:  "Potato Late Blight",
+    4:  "Potato Healthy",
+    5:  "Tomato Bacterial Spot",
+    6:  "Tomato Early Blight",
+    7:  "Tomato Late Blight",
+    8:  "Tomato Leaf Mold",
+    9:  "Tomato Septoria Leaf Spot",
+    10: "Tomato Spider Mites",
+    11: "Tomato Target Spot",
+    12: "Tomato Yellow Leaf Curl Virus",
+    13: "Tomato Mosaic Virus",
+    14: "Tomato Healthy",
+}
+num_classes = len(disease_classes)
+
+# ─── Bengali recommendations ──────────────────────────────────────────────
+disease_recommendations_bn = {
+    "Pepper Bell Bacterial Spot":    "মরিচের ব্যাকটেরিয়াল স্পট। প্রতিকার: কপার অক্সিক্লোরাইড ১ গ্রাম/লিটার স্প্রে করুন। আক্রান্ত পাতা সরান।",
+    "Pepper Bell Healthy":           "মরিচ গাছ সুস্থ আছে! নিয়মিত সেচ ও সার দিন।",
+    "Potato Early Blight":           "আলুর আর্লি ব্লাইট। প্রতিকার: ম্যানকোজেব ৭৫% ডব্লিউপি ২ গ্রাম/লিটার, ১০ দিনে একবার স্প্রে।",
+    "Potato Late Blight":            "আলুর লেট ব্লাইট (মারাত্মক)। প্রতিকার: ম্যানকোজেব + মেটালাক্সিল স্প্রে করুন, আর্দ্রতা কমান।",
+    "Potato Healthy":                "আলু গাছ সুস্থ আছে।",
+    "Tomato Bacterial Spot":         "টমেটোর ব্যাকটেরিয়াল স্পট। প্রতিকার: কপার অক্সিক্লোরাইড ১ গ্রাম/লিটার স্প্রে করুন।",
+    "Tomato Early Blight":           "টমেটোর আর্লি ব্লাইট। প্রতিকার: ম্যানকোজেব ২-২.৫ গ্রাম/লিটার স্প্রে, আক্রান্ত পাতা ফেলুন।",
+    "Tomato Late Blight":            "টমেটোর লেট ব্লাইট। প্রতিকার: ম্যানকোজেব + মেটালাক্সিল, বৃষ্টির পর অবশ্যই স্প্রে করুন।",
+    "Tomato Leaf Mold":              "টমেটোর লিফ মোল্ড। প্রতিকার: ক্লোরোথ্যালোনিল স্প্রে, বায়ু চলাচল বাড়ান।",
+    "Tomato Septoria Leaf Spot":     "সেপ্টোরিয়া লিফ স্পট। প্রতিকার: ম্যানকোজেব স্প্রে ও আক্রান্ত পাতা সরান।",
+    "Tomato Spider Mites":           "স্পাইডার মাইট। প্রতিকার: অ্যাবামেকটিন ০.৫ মিলি/লিটার স্প্রে করুন।",
+    "Tomato Target Spot":            "টমেটো টার্গেট স্পট। প্রতিকার: ম্যানকোজেব ২ গ্রাম/লিটার, প্রতি ৭-১০ দিনে স্প্রে করুন। আক্রান্ত পাতা পুড়িয়ে ফেলুন।",
+    "Tomato Yellow Leaf Curl Virus": "ইয়েলো লিফ কার্ল ভাইরাস। প্রতিকার: সাদা মাছি দমন করুন, ইমিডাক্লোপ্রিড ০.৫ মিলি/লিটার স্প্রে।",
+    "Tomato Mosaic Virus":           "মোজাইক ভাইরাস। প্রতিকার: আক্রান্ত গাছ তুলে পুড়িয়ে ফেলুন, রোগমুক্ত বীজ ব্যবহার করুন।",
+    "Tomato Healthy":                "টমেটো গাছ সুস্থ আছে! নিয়মিত সেচ ও সার দিন।",
+}
+
+# ─── Transform ────────────────────────────────────────────────────────────
+data_transforms = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+# ─── Model setup ──────────────────────────────────────────────────────────
+model = models.resnet50(pretrained=False)  # pretrained=False, আমরা নিজেরা train করব
+model.fc = nn.Sequential(
+    nn.Dropout(0.5),
+    nn.Linear(model.fc.in_features, num_classes)
+)
+model = model.to(device)
+
+# Trained model থাকলে load করো
+MODEL_PATH = '/root/plant_disease_model/resnet50_best.pth'
+if os.path.exists(MODEL_PATH):
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    model.eval()
+    print(f"✅ Trained model loaded from: {MODEL_PATH}")
+else:
+    print(f"⚠️ Trained model নেই। Cell 43 চালিয়ে আগে train করুন।")
+    print(f"   তারপর এই cell আবার run করুন।")
+
+# ─── Analyze function ─────────────────────────────────────────────────────
+def analyze_plant_image(image):
+    """
+    Plant leaf image analyze করো।
+    Cell 43 দিয়ে train করার পর সঠিক result দেবে।
+    """
+    import json as _json
+
+    if not isinstance(image, Image.Image):
+        from PIL import Image as PILImage
+        image = PILImage.fromarray(image)
+    image = image.convert("RGB")
+
+    # Model trained কিনা চেক করো
+    if not os.path.exists(MODEL_PATH):
+        return {
+            'error': True,
+            'message': '⚠️ Model train করা হয়নি!\nপ্রথমে Cell 43 রান করে model train করুন।\nTraining শেষে Cell 32 আবার run করুন।',
+            'disease': 'Unknown', 'confidence': 0.0,
+            'recommendation': 'Cell 43 রান করুন।', 'all_probabilities': {}
+        }
+
+    # idx_to_class.json থাকলে সেটা use করো (সবচেয়ে সঠিক mapping)
+    live_classes = disease_classes.copy()
+    idx_json = '/content/idx_to_class.json'
+    if os.path.exists(idx_json):
+        with open(idx_json) as f:
+            raw = _json.load(f)
+        def _readable(name):
+            return name.replace("___", " ").replace("__", " ").replace("_", " ").strip()
+        live_classes = {int(k): _readable(v) for k, v in raw.items()}
+
+    # Model load (trained model)
+    _model = models.resnet50(pretrained=False)
+    _model.fc = nn.Sequential(
+    nn.Dropout(0.5),
+    nn.Linear(_model.fc.in_features, len(live_classes))
+)
+    _model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    _model = _model.to(device)
+    _model.eval()
+
+    img_t = data_transforms(image).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        outputs = _model(img_t)
+        probs   = torch.nn.functional.softmax(outputs[0], dim=0)
+        conf, pred = torch.max(probs, 0)
+
+    idx        = pred.item()
+    disease    = live_classes.get(idx, "Unknown")
+    confidence = conf.item()
+
+    # Recommendation খোঁজো
+    recommendation = "কৃষি অফিসে যোগাযোগ করুন বিস্তারিত পরামর্শের জন্য।"
+    for key, rec in disease_recommendations_bn.items():
+        if key.lower() in disease.lower() or disease.lower() in key.lower():
+            recommendation = rec
+            break
+
+    return {
+        'disease':          disease,
+        'confidence':       confidence,
+        'recommendation':   recommendation,
+        'all_probabilities': {live_classes[i]: float(probs[i]) for i in range(len(live_classes))}
+    }
+
+print(f"✅ Model Ready! Classes: {num_classes}")
+print(f"   Class mapping (alphabetical/correct):")
+for k, v in disease_classes.items():
+    print(f"   {k}: {v}")
+
+
+# Cell 33: idx_to_class dynamic loader (Training এর পর run করুন)
+# Training শেষে idx_to_class.json থেকে class mapping load করে
+# disease_classes dict আপডেট করে দেবে।
+
+import json, os
+
+idx_json = '/root/plant_disease_model/class_mapping.json'
+
+if os.path.exists(idx_json):
+    with open(idx_json) as f:
+        raw = json.load(f)
+
+    # folder name → readable name (underscore/__ remove করো)
+    def folder_to_readable(name):
+        name = name.replace("___", " ").replace("__", " ").replace("_", " ")
+        return name.strip()
+
+    disease_classes = {int(k): folder_to_readable(v) for k, v in raw.items()}
+    num_classes     = len(disease_classes)
+
+    print(f"✅ idx_to_class loaded! {num_classes} classes:")
+    for k, v in sorted(disease_classes.items()):
+        print(f"   {k}: {v}")
+else:
+    print("⚠️ idx_to_class.json নেই। Cell 43 দিয়ে train করলে তৈরি হবে।")
+    print("   এখন Cell 32 এর default disease_classes ব্যবহার হচ্ছে।")
+
+
+import os
+import json
+from PIL import Image
+import torch
+from torchvision import transforms
+
+print("🔍 Starting Image Analysis Test...\n")
+
+# ✅ Correct dataset path
+dataset_path = "/kaggle/input/datasets/emmarex/plantdisease/PlantVillage"
+
+# ✅ Load class mapping (IMPORTANT)
+mapping_path = "/root/plant_disease_model/class_mapping.json"
+
+with open(mapping_path) as f:
+    class_mapping = json.load(f)
+
+# Convert keys to int
+class_mapping = {int(k): v for k, v in class_mapping.items()}
+
+# ✅ Same transform as validation
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406],
+                         [0.229, 0.224, 0.225])
+])
+
+# Load sample images
+test_images = {}
+
+for class_name in os.listdir(dataset_path):
+    class_path = os.path.join(dataset_path, class_name)
+
+    if os.path.isdir(class_path):
+        images = [img for img in os.listdir(class_path)
+                  if img.endswith(('.jpg', '.jpeg', '.png'))]
+
+        if images:
+            img_path = os.path.join(class_path, images[0])
+            img = Image.open(img_path).convert("RGB")
+            test_images[class_name] = img
+
+print(f"✅ Loaded {len(test_images)} test images\n")
+
+# Prediction
+print("=" * 70)
+print(f"{'Actual Class':<40} | {'Predicted Class'}")
+print("-" * 70)
+
+model.eval()
+
+for actual, img in test_images.items():
+    img_t = transform(img).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        outputs = model(img_t)
+        _, pred = torch.max(outputs, 1)
+
+    pred_class = class_mapping[pred.item()]
+
+    print(f"{actual[:38]:<40} | {pred_class}")
+
+
+# Cell 44: Install Speech-to-Text Libraries
+
+!pip install pydub
+!pip install SpeechRecognition
+!pip install google-cloud-speech
+
+print("✅ Speech libraries installed!")
+
+
+# Cell 45: Speech-to-Text Functions
+
+import speech_recognition as sr
+from pydub import AudioSegment
+import io
+
+def process_voice_message(audio_url):
+    """
+    WhatsApp voice message থেকে text extract করো
+
+    Args:
+        audio_url: Twilio থেকে আসা audio URL
+
+    Returns:
+        Transcribed Bengali text
+    """
+
+    try:
+        import urllib.request
+
+        print(f"🎤 Processing voice message...")
+
+        # Download audio file
+        response = urllib.request.urlopen(audio_url)
+        audio_content = response.read()
+
+        # Convert to WAV
+        audio = AudioSegment.from_file(io.BytesIO(audio_content))
+        wav_content = io.BytesIO()
+        audio.export(wav_content, format="wav")
+        wav_content.seek(0)
+
+        # Recognize speech
+        recognizer = sr.Recognizer()
+
+        with sr.AudioFile(wav_content) as source:
+            audio = recognizer.record(source)
+
+        # Use Google Speech Recognition (supports Bengali)
+        text = recognizer.recognize_google(audio, language='bn-BD')
+
+        print(f"✅ Transcribed: {text}")
+        return text
+
+    except sr.UnknownValueError:
+        return None  # Could not understand audio
+    except sr.RequestError as e:
+        print(f"❌ Speech recognition error: {e}")
+        return None
+    except Exception as e:
+        print(f"❌ Error processing voice: {e}")
+        return None
+
+# Test করো (demo only, actual audio প্রয়োজন)
+print("✅ Voice processing functions ready!")
+print("\nNote: Voice processing requires actual WhatsApp audio files")
+
+# Cell 46: Install Gradio
+
+!pip install gradio
+
+print("✅ Gradio installed!")
+
+# Cell 47: Complete AgriBot Gradio Interface — FULLY FIXED & UPDATED
+import gradio as gr
+from PIL import Image
+import numpy as np
+import requests
+import unicodedata
+from sklearn.metrics.pairwise import cosine_similarity
+import pickle
+import scipy.sparse
+import pandas as pd
+
+kb = pd.read_csv('/content/agribot_knowledge.csv', encoding='utf-8')
+with open('/content/tfidf_vectorizer.pkl', 'rb') as f:
+    vectorizer = pickle.load(f)
+question_vectors = scipy.sparse.load_npz('/content/question_vectors.npz')
+
+# ── সব dependencies check ────────────────────────────────────
+def _search(question, top_k=1):
+    """SBERT থাকলে SBERT, না হলে TF-IDF — সর্বোচ্চ নির্ভুল এবং থ্রেশহোল্ড নিয়ন্ত্রিত"""
+    THRESHOLD = 0.7  # ৭০% মিল না থাকলে উত্তর দেবে না
+
+    best_score = 0.0  # initialize করা হয়েছে
+    best_tfidf_score = 0.0
+    try:
+        # ১. SBERT দিয়ে চেষ্টা করো
+        try:
+            from sentence_transformers import util
+            query_emb = sbert_model.encode(question, convert_to_tensor=True)
+            scores = util.cos_sim(query_emb, question_embeddings)[0]
+
+            # সবচেয়ে ভালো মিল পাওয়া ইনডেক্স এবং স্কোর
+            best_score = float(scores.max())
+            idx = int(scores.argmax())
+
+            if best_score >= THRESHOLD:
+                return [{
+                    'answer': kb.iloc[idx]['Answer'],
+                    'disease': kb.iloc[idx]['Disease_Name'],
+                    'category': kb.iloc[idx]['Category'],
+                    'confidence': best_score
+                }]
+        except Exception:
+            pass
+
+        # ২. TF-IDF fallback (SBERT কাজ না করলে বা স্কোর কম হলে)
+        import unicodedata as ud
+        cleaned = ' '.join(question.split())
+        cleaned = ud.normalize('NFKD', cleaned).lower()
+        qv = vectorizer.transform([cleaned])
+        sims = cosine_similarity(qv, question_vectors)[0]
+
+        best_tfidf_score = float(sims.max())
+        idx_tfidf = int(sims.argmax())
+
+        if best_tfidf_score >= THRESHOLD:
+            return [{
+                'answer': kb.iloc[idx_tfidf]['Answer'],
+                'disease': kb.iloc[idx_tfidf]['Disease_Name'],
+                'category': kb.iloc[idx_tfidf]['Category'],
+                'confidence': best_tfidf_score
+            }]
+
+        # ৩. যদি কোনোটার স্কোরই থ্রেশহোল্ডের উপরে না থাকে
+        return [{
+            'answer': "দুঃখিত, আপনার প্রশ্নের সঠিক উত্তর আমার কাছে নেই। অনুগ্রহ করে নির্দিষ্ট রোগ বা ফসলের নাম উল্লেখ করে প্রশ্ন করুন অথবা ছবি আপলোড করুন।",
+            'disease': 'অনিশ্চিত (Low Confidence)',
+            'category': 'Unknown',
+            'confidence': max(best_score if 'best_score' in locals() else 0, best_tfidf_score)
+        }]
+
+    except Exception as e:
+        return [{'answer': f'Error: {e}', 'disease': 'Unknown', 'category': 'Unknown', 'confidence': 0.0}]
+
+# bot_logger যদি না থাকে তাহলে simple version
+class _SimpleLogger:
+    def __init__(self): self.logs = []
+    def log_interaction(self, **kwargs): self.logs.append(kwargs)
+    def get_stats(self):
+        if not self.logs:
+            return {'total_interactions': 0, 'avg_confidence': 0.0, 'category_distribution': {}}
+        total = len(self.logs)
+        cats = {}
+        confs = []
+        for log in self.logs:
+            r = log.get('result', {})
+            cat = r.get('category', 'Unknown') if isinstance(r, dict) else 'Unknown'
+            cats[cat] = cats.get(cat, 0) + 1
+            confs.append(r.get('confidence', 0.0) if isinstance(r, dict) else 0.0)
+        return {'total_interactions': total, 'avg_confidence': sum(confs)/total, 'category_distribution': cats}
+
+try:
+    bot_logger
+except NameError:
+    bot_logger = _SimpleLogger()
+
+# ============================================================
+# HANDLERS
+# ============================================================
+def handle_text_question(question):
+    if not question or not question.strip():
+        return "দয়া করে প্রশ্ন লিখুন।", "0%", "—"
+    try:
+        results = _search(question, top_k=1)
+        result  = results[0]
+
+        # থ্রেশহোল্ডের নিচে থাকলে আলাদা মেসেজ (বিকল্প লজিক যদি _search-এ হ্যান্ডেল না করা হয়)
+        if result['confidence'] < 0.7:
+            response = (
+                f"⚠️ আমি আপনার প্রশ্নটি পুরোপুরি বুঝতে পারছি না (নিশ্চয়তা: {result['confidence']:.0%})\n\n"
+                f"সম্ভাব্য উত্তর হতে পারে:\n{result['answer']}\n\n"
+                f"সঠিক ফলাফলের জন্য প্রশ্নটি আরও স্পষ্ট করুন।"
+            )
+        else:
+            response = (
+                f"🌾 সমস্যা: {result['disease']}\n"
+                f"📊 আত্মবিশ্বাস: {result['confidence']:.0%}\n\n"
+                f"💡 পরামর্শ:\n{result['answer']}\n\n"
+                f"এটি AI সহায়তা। গুরুতর সমস্যায় কৃষি অফিসে যোগাযোগ করুন।"
+            )
+
+        bot_logger.log_interaction(from_number="gradio", question=question, result=result, response=response)
+        return response, f"{result['confidence']:.0%}", result['disease']
+    except Exception as e:
+        return f"ত্রুটি: {str(e)}", "0%", "—"
+
+def handle_image_upload(image):
+    if image is None:
+        return "দয়া করে একটি ছবি আপলোড করুন।", "0%"
+    try:
+        if isinstance(image, np.ndarray):
+            if image.dtype != np.uint8: image = (image * 255).astype(np.uint8)
+            image = Image.fromarray(image).convert('RGB')
+        elif not isinstance(image, Image.Image):
+            return "অজানা ছবির ধরন। অনুগ্রহ করে আবার চেষ্টা করুন।", "0%"
+
+        # analyze_plant_image available কিনা চেক করো
+        try:
+            analyze_fn = analyze_plant_image
+        except NameError:
+            return "⚠️ ছবি বিশ্লেষণ মডেল লোড হয়নি।\nCell 32 (Model Setup) রান করুন, তারপর আবার চেষ্টা করুন।", "0%"
+
+        analysis = analyze_fn(image)
+
+        # Error চেক
+        if isinstance(analysis, dict) and 'error' in analysis:
+            err_msg = analysis.get('message', str(analysis['error']))
+            return f"⚠️ বিশ্লেষণে সমস্যা: {err_msg}", "0%"
+
+        conf = analysis.get('confidence', 0)
+        if conf < 0.4:
+            return ("ছবিটি স্পষ্ট নয় বা পরিচিত রোগ শনাক্ত হয়নি।\n"
+                    "পরামর্শ: ভালো আলোতে পাতার স্পষ্ট ছবি তুলুন।"), f"{conf:.0%}"
+
+        report = (
+            f"🔍 শনাক্তকৃত রোগ: {analysis['disease']}\n"
+            f"📊 আত্মবিশ্বাস: {conf:.0%}\n\n"
+            f"💡 পরামর্শ:\n{analysis['recommendation']}\n\n"
+            f"অন্যান্য সম্ভাবনা:\n"
+        )
+        for d, p in list(analysis.get('all_probabilities', {}).items())[:3]:
+            report += f"• {d}: {p:.1%}\n"
+        return report, f"{conf:.0%}"
+
+    except Exception as e:
+        return f"ত্রুটি: {str(e)}", "0%"
+
+# বাকি অংশ (statistics, weather, interface) অপরিবর্তিত...
+def get_statistics():
+    stats = bot_logger.get_stats()
+    if stats['total_interactions'] == 0: return "এখনও কোনো প্রশ্ন করা হয়নি।"
+    report = f"📊 AgriBot পরিসংখ্যান\n{'='*30}\n📱 মোট প্রশ্ন: {stats['total_interactions']}\n📈 গড় আত্মবিশ্বাস: {stats['avg_confidence']:.0%}\n\n📂 বিভাগ অনুযায়ী:\n"
+    for cat, count in stats['category_distribution'].items():
+        report += f"  • {cat}: {count} টি\n"
+    return report
+
+def _get_weather_gradio():
+    """Open-Meteo API — বিনামূল্যে, কোনো API key লাগে না, সবসময় fresh data"""
+    try:
+        from datetime import datetime
+        import time as _t
+        # cache bust করতে timestamp যোগ করো
+        ts = int(_t.time())
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude=23.685&longitude=90.356"
+            f"&current=temperature_2m,relative_humidity_2m,"
+            f"precipitation,wind_speed_10m,weather_code"
+            f"&timezone=Asia/Dhaka&_={ts}"
+        )
+        r = requests.get(url, timeout=10)
+        d = r.json()['current']
+
+        temp  = d['temperature_2m']
+        humid = d['relative_humidity_2m']
+        rain  = d['precipitation']
+        wind  = d['wind_speed_10m']
+        code  = d['weather_code']
+        now   = datetime.now().strftime('%H:%M:%S')
+
+        sky_map = {
+            0: "☀️ পরিষ্কার রোদ", 1: "🌤️ প্রায় পরিষ্কার",
+            2: "⛅ আংশিক মেঘলা", 3: "☁️ মেঘলা",
+            45: "🌫️ কুয়াশা", 48: "🌫️ ঘন কুয়াশা",
+            51: "🌦️ হালকা বৃষ্টি", 61: "🌧️ মাঝারি বৃষ্টি",
+            63: "🌧️ ভারী বৃষ্টি", 80: "🌦️ ঝরঝরে বৃষ্টি",
+            95: "⛈️ বজ্রঝড়", 99: "⛈️ শিলাসহ বজ্রঝড়"
+        }
+        sky = sky_map.get(code, f"কোড-{code}")
+
+        result = (
+            f"🌤️ আজকের আবহাওয়া — ঢাকা\n"
+            f"⏰ আপডেট: {now}\n"
+            f"{'='*32}\n"
+            f"🌡️ তাপমাত্রা  : {temp}°C\n"
+            f"💧 আর্দ্রতা   : {humid}%\n"
+            f"🌧️ বৃষ্টি     : {rain} mm\n"
+            f"💨 বাতাস     : {wind} km/h\n"
+            f"☁️ অবস্থা    : {sky}\n\n"
+            f"💡 কৃষি পরামর্শ:\n"
+        )
+        if temp > 35:    result += "🔴 অতিরিক্ত গরম — সেচ বাড়িয়ে দিন।\n"
+        elif temp < 15:  result += "🔵 ঠান্ডা — ফসল ঢেকে রাখুন।\n"
+        else:            result += "🟢 তাপমাত্রা স্বাভাবিক।\n"
+        if humid > 80:   result += "⚠️ আর্দ্রতা বেশি — ছত্রাক রোগের ঝুঁকি। ফাংগিসাইড দিন।\n"
+        elif humid < 40: result += "⚠️ আর্দ্রতা কম — সেচ বাড়ান।\n"
+        if rain > 0:     result += "🌧️ বৃষ্টি হচ্ছে — জমিতে পানি জমতে দেবেন না।\n"
+
+        return result
+    except Exception as e:
+        return f"❌ আবহাওয়া তথ্য পাওয়া যায়নি।\nকারণ: {e}\nইন্টারনেট সংযোগ চেক করুন।"
+
+# ============================================================
+# BUILD INTERFACE
+# ============================================================
+with gr.Blocks(title="🌾 AgriBot", theme=gr.themes.Soft()) as demo:
+    gr.Markdown("# 🌾 AgriBot - স্মার্ট কৃষি সহায়তা বট")
+
+    with gr.Tab("💬 প্রশ্ন করুন"):
+        with gr.Row():
+            with gr.Column(scale=1):
+                question_input = gr.Textbox(label="আপনার প্রশ্ন", placeholder="যেমন: ধানের ব্লাইট রোগ...", lines=3)
+                ask_btn = gr.Button("জিজ্ঞাসা করুন 🔍", variant="primary")
+            with gr.Column(scale=2):
+                answer_output = gr.Textbox(label="উত্তর", lines=8, interactive=False)
+                with gr.Row():
+                    confidence_out = gr.Textbox(label="নিশ্চয়তা (Confidence)")
+                    disease_out = gr.Textbox(label="সনাক্ত সমস্যা")
+
+    with gr.Tab("🖼️ ছবি বিশ্লেষণ"):
+        with gr.Row():
+            img_input = gr.Image(label="পাতার ছবি দিন (Crop Disease Detection)", type="pil")
+            with gr.Column():
+                img_output = gr.Textbox(label="বিশ্লেষণ রিপোর্ট", lines=10)
+                img_conf = gr.Textbox(label="নিশ্চয়তা")
+        analyze_btn = gr.Button("বিশ্লেষণ করুন 🔬", variant="primary")
+
+    with gr.Tab("📊 পরিসংখ্যান"):
+        stats_btn = gr.Button("🔄 ডাটা রিফ্রেশ করুন")
+        stats_out = gr.Textbox(label="বট পারফরম্যান্স রিপোর্ট", lines=10)
+
+    with gr.Tab("🌤️ আবহাওয়া"):
+        weather_btn = gr.Button("🔄 আবহাওয়া আপডেট")
+        weather_out = gr.Textbox(label="কৃষি-আবহাওয়া আপডেট", lines=10)
+
+    # Event Listeners
+    ask_btn.click(handle_text_question, [question_input], [answer_output, confidence_out, disease_out])
+    analyze_btn.click(handle_image_upload, [img_input], [img_output, img_conf])
+    stats_btn.click(get_statistics, outputs=[stats_out])
+    weather_btn.click(_get_weather_gradio, outputs=[weather_out])
+    demo.load(_get_weather_gradio, outputs=[weather_out])
+
+print("✅ AgriBot আপডেট সম্পন্ন! এখন Cell 48 রান করে এটি টেস্ট করুন।")
+
+
+# Cell 48: Launch Gradio App
+
+print("🚀 Launching AgriBot Demo...\n")
+print("=" * 80)
+print("🎨 AGRIBOT GRADIO INTERFACE")
+print("=" * 80)
+
+# The 'app' object is already created in Cell 13. We just need to launch it.
+# For Colab, use share=True
+demo.launch(share=True, debug=False)
+
+print("\n✅ Interface launched successfully!")
+print("Click the public link above to access AgriBot")
+
+
+# Cell 49: Weather API — Open-Meteo (বিনামূল্যে, কোনো API key লাগে না)
+
+import requests
+from datetime import datetime
+
+def get_weather_advice(latitude=23.685, longitude=90.356):
+    """
+    Open-Meteo API — সম্পূর্ণ বিনামূল্যে
+    কোনো API key লাগে না
+    """
+    try:
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={latitude}&longitude={longitude}"
+            f"&current=temperature_2m,relative_humidity_2m,"
+            f"precipitation,wind_speed_10m,weather_code"
+            f"&timezone=Asia/Dhaka"
+        )
+        r = requests.get(url, timeout=8)
+        d = r.json()['current']
+
+        temp  = d['temperature_2m']
+        humid = d['relative_humidity_2m']
+        rain  = d['precipitation']
+        wind  = d['wind_speed_10m']
+        code  = d['weather_code']
+
+        sky_map = {
+            0: "রোদেলা", 1: "প্রায় পরিষ্কার", 2: "আংশিক মেঘলা",
+            3: "মেঘলা", 45: "কুয়াশা", 48: "ঘন কুয়াশা",
+            51: "হালকা বৃষ্টি", 61: "মাঝারি বৃষ্টি", 63: "ভারী বৃষ্টি",
+            80: "ঝরঝরে বৃষ্টি", 95: "বজ্রঝড়"
+        }
+        sky = sky_map.get(code, "অজানা")
+
+        advice = (
+            f"🌤️ আজকের আবহাওয়া\n"
+            f"{'='*25}\n"
+            f"🌡️ তাপমাত্রা : {temp}°C\n"
+            f"💧 আর্দ্রতা  : {humid}%\n"
+            f"🌧️ বৃষ্টি    : {rain}mm\n"
+            f"💨 বাতাস    : {wind} km/h\n"
+            f"☁️ অবস্থা   : {sky}\n\n"
+            f"💡 কৃষি পরামর্শ:\n"
+        )
+
+        if temp > 35:   advice += "• খুব গরম — বেশি সেচ দিন।\n"
+        elif temp < 15: advice += "• ঠান্ডা — ফসল ঢেকে রাখুন।\n"
+        else:           advice += "• তাপমাত্রা স্বাভাবিক।\n"
+
+        if humid > 80:  advice += "• আর্দ্রতা বেশি — ছত্রাক সাবধান। ফাংগিসাইড দিন।\n"
+        elif humid < 40: advice += "• আর্দ্রতা কম — সেচ বাড়ান।\n"
+
+        if rain > 5:    advice += "• বৃষ্টি হচ্ছে — জমিতে পানি জমতে দেবেন না।\n"
+
+        return advice
+
+    except Exception as e:
+        return f"❌ আবহাওয়া তথ্য পাওয়া যায়নি: {e}"
+
+# Test
+print("✅ Weather function ready!")
+print("\n🌤️ বর্তমান আবহাওয়া (ঢাকা):\n")
+print(get_weather_advice())
+
+
+#CELL 50
+import json
+from datetime import datetime
+import numpy as np
+import pickle
+import os
+
+# Embedded detect_intent function from Cell GAmMGFOkYCe9
+def detect_intent(text):
+    """
+    প্রশ্ন থেকে intent detect করো
+    """
+    text_lower = text.lower()
+
+    # Disease keywords
+    disease_keywords = ['রোগ', 'দাগ', 'পাতা', 'শুকিয়ে', 'পড়ছে']
+
+    # Fertilizer keywords
+    fertilizer_keywords = ['সার', 'তৈরি', 'ব্যবহার', 'দেব', 'খোল']
+
+    # Pest keywords
+    pest_keywords = ['পোকা', 'কীড়া', 'ছিদ্র', 'দমন', 'দেখছি']
+
+    # Irrigation keywords
+    irrigation_keywords = ['সেচ', 'পানি', 'দিতে', 'জমি', 'নিকাশ']
+
+    # Count matches
+    disease_count = sum(1 for kw in disease_keywords if kw in text_lower)
+    fertilizer_count = sum(1 for kw in fertilizer_keywords if kw in text_lower)
+    pest_count = sum(1 for kw in pest_keywords if kw in text_lower)
+    irrigation_count = sum(1 for kw in irrigation_keywords if kw in text_lower)
+
+    # Determine intent
+    intents = {
+        'Disease': disease_count,
+        'Fertilizer': fertilizer_count,
+        'Pest': pest_count,
+        'Irrigation': irrigation_count
+    }
+
+    if max(intents.values()) == 0:
+        return 'General', 0
+
+    detected_intent = max(intents, key=intents.get)
+    confidence = intents[detected_intent] / sum(intents.values())
+
+    return detected_intent, confidence
+
+# Embedded AgriBotLogger class from Cell IjtzYyeHYIWx
+class AgriBotLogger:
+    """AgriBot responses log করার class"""
+
+    def __init__(self):
+        self.logs = []
+
+    def log_interaction(self, from_number, question, result, response):
+        """Interaction log করো"""
+        log_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'from_number': from_number,
+            'question': question,
+            'disease_detected': result['disease'] if 'disease' in result else 'Unknown',
+            'confidence': result['confidence'] if 'confidence' in result else 0.0,
+            'category': result['category'] if 'category' in result else 'Unknown',
+            'response_length': len(response),
+            'intent': detect_intent(question)[0]
+        }
+        self.logs.append(log_entry)
+        return log_entry
+
+    def get_stats(self):
+        """Statistics দেখো"""
+        if not self.logs:
+            return {'total_interactions': 0, 'avg_confidence': 0.0, 'category_distribution': {}}
+
+        total = len(self.logs)
+        avg_confidence = sum(log['confidence'] for log in self.logs) / total
+
+        # Category distribution
+        categories = {}
+        for log in self.logs:
+            cat = log['category']
+            categories[cat] = categories.get(cat, 0) + 1
+
+        return {
+            'total_interactions': total,
+            'avg_confidence': avg_confidence,
+            'category_distribution': categories
+        }
+
+    def export_logs(self, filename='agribot_logs.json'):
+        """Logs export করো"""
+        with open(f'/content/{filename}', 'w', encoding='utf-8') as f:
+            json.dump(self.logs, f, ensure_ascii=False, indent=2)
+        print(f"✅ Logs exported to {filename}")
+
+# Ensure bot_logger is loaded or initialized
+if 'bot_logger' not in locals() and 'bot_logger' not in globals():
+    logger_path = '/content/agribot_logger.pkl'
+    if os.path.exists(logger_path):
+        try:
+            with open(logger_path, 'rb') as f:
+                bot_logger = pickle.load(f)
+            print(f"✅ bot_logger loaded from {logger_path}")
+        except Exception as e:
+            print(f"❌ Error loading bot_logger: {e}")
+            bot_logger = AgriBotLogger()
+            print("⚠️ Failed to load bot_logger, initialized a new one.")
+    else:
+        print(f"❌ {logger_path} not found. Initializing a new bot_logger.")
+        bot_logger = AgriBotLogger()
+
+
+class AgriBotAnalytics:
+    """Advanced analytics for AgriBot"""
+
+    def __init__(self, logger):
+        self.logger = logger
+
+    def get_detailed_stats(self):
+        """Detailed statistics"""
+
+        stats = self.logger.get_stats()
+
+        if stats['total_interactions'] == 0:
+            return {
+                'status': 'no_data',
+                'message': 'No interactions yet'
+            }
+
+        logs = self.logger.logs
+
+        # Category analysis
+        categories = {}
+        for log in logs:
+            cat = log['category']
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(log)
+
+        # Disease analysis
+        diseases = {}
+        for log in logs:
+            disease = log['disease_detected']
+            if disease not in diseases:
+                diseases[disease] = 0
+            diseases[disease] += 1
+
+        # Confidence analysis
+        confidences = [log['confidence'] for log in logs]
+
+        return {
+            'total_interactions': len(logs),
+            'avg_confidence': np.mean(confidences),
+            'median_confidence': np.median(confidences),
+            'min_confidence': np.min(confidences),
+            'max_confidence': np.max(confidences),
+            'category_distribution': {cat: len(logs) for cat, logs in categories.items()},
+            'top_diseases': dict(sorted(diseases.items(), key=lambda x: x[1], reverse=True)[:5]),
+            'total_categories': len(categories),
+            'total_diseases': len(diseases)
+        }
+
+    def generate_report(self):
+        """Generate detailed report"""
+
+        stats = self.get_detailed_stats()
+
+        if 'status' in stats and stats['status'] == 'no_data':
+            return "No data available yet"
+
+        report = f"""
+{'=' * 80}
+📊 AGRIBOT ANALYTICS REPORT
+{'=' * 80}
+
+📱 INTERACTION STATISTICS:
+   • Total Interactions: {stats['total_interactions']}
+   • Average Confidence: {stats['avg_confidence']:.2%}
+   • Median Confidence: {stats['median_confidence']:.2%}
+   • Min Confidence: {stats['min_confidence']:.2%}
+   • Max Confidence: {stats['max_confidence']:.2%}
+
+📂 CATEGORY DISTRIBUTION:
+"""
+
+        for category, count in stats['category_distribution'].items():
+            percentage = (count / stats['total_interactions']) * 100
+            report += f"\n   • {category}: {count} ({percentage:.1f}%)"
+
+        report += f"\n\n🌾 TOP 5 DISEASES:\n"
+        for i, (disease, count) in enumerate(stats['top_diseases'].items(), 1):
+            report += f"   {i}. {disease}: {count} queries\n"
+
+        report += f"\n\n📈 SUMMARY:\n"
+        report += f"   • Total Categories: {stats['total_categories']}\n"
+        report += f"   • Total Diseases Detected: {stats['total_diseases']}\n"
+
+        report += "\n" + "=" * 80
+
+        return report
+
+# Create analytics
+analytics = AgriBotAnalytics(bot_logger)
+
+print("✅ Analytics ready!")
+print("\n" + analytics.generate_report())
+
+
+
+#CELL 51 — UPDATED (Direct API Send Fix)
+# =====================================================================
+import subprocess, sys
+subprocess.run([sys.executable, "-m", "pip", "install", "pyngrok", "flask", "twilio", "SpeechRecognition", "pydub", "-q"], capture_output=True)
+subprocess.run(["apt-get", "install", "-y", "ffmpeg", "-q"], capture_output=True)  # for voice
+print("✅ Packages installed")
+
+import os, time as _time
+try:
+    from pyngrok import ngrok as _ng; _ng.kill()
+except: pass
+try:
+    subprocess.run(["fuser", "-k", "5001/tcp"], capture_output=True, timeout=5)
+    _time.sleep(2)
+    print("✅ Port 5001 cleared")
+except: pass
+
+import pandas as pd
+import numpy as np
+import pickle
+import scipy.sparse
+import unicodedata
+import threading
+import time
+import json
+import requests
+import io
+from datetime import datetime
+from sklearn.metrics.pairwise import cosine_similarity
+from flask import Flask, request
+from twilio.rest import Client
+from twilio.twiml.messaging_response import MessagingResponse
+from pyngrok import ngrok
+import warnings
+warnings.filterwarnings('ignore')
+
+print("\n📦 Loading saved files...\n")
+
+kb = pd.read_csv('/content/agribot_knowledge.csv', encoding='utf-8')
+print(f"✅ Knowledge Base: {len(kb)} Q&A pairs")
+
+with open('/content/tfidf_vectorizer.pkl', 'rb') as f:
+    vectorizer = pickle.load(f)
+print("✅ TF-IDF Vectorizer loaded")
+
+question_vectors = scipy.sparse.load_npz('/content/question_vectors.npz')
+print(f"✅ Question Vectors: {question_vectors.shape}")
+
+# ── PUT YOUR CREDENTIALS HERE ─────────────────────────────────
+TWILIO_ACCOUNT_SID = "AC28934780455fa3eefc8999e46d261a1f"  # ← আপনার SID
+TWILIO_AUTH_TOKEN  = "67a129f7ccd829dc49547c75222e6dd5"   # ← আপনার Token
+TWILIO_WA_NUMBER   = "whatsapp:+14155238886"
+# ─────────────────────────────────────────────────────────────
+
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+print("✅ Twilio client initialized")
+
+# ── Helper functions ──────────────────────────────────────────
+def clean_text(text):
+    text = ' '.join(text.split())
+    return unicodedata.normalize('NFKD', text).lower()
+
+def search_kb(question):
+    qv = vectorizer.transform([clean_text(question)])
+    sims = cosine_similarity(qv, question_vectors)[0]
+    idx = int(np.argmax(sims))
+    return {
+        'answer':     kb.iloc[idx]['Answer'],
+        'disease':    kb.iloc[idx]['Disease_Name'],
+        'category':   kb.iloc[idx]['Category'],
+        'confidence': float(sims[idx])
+    }
+
+def format_response(result):
+    emoji = "🟢" if result['confidence'] > 0.6 else "🟡"
+    return (
+        f"{emoji} *সমস্যা:* {result['disease']}\n"
+        f"📊 *নিশ্চিততা:* {result['confidence']:.0%}\n\n"
+        f"💡 *পরামর্শ:*\n{result['answer']}\n\n"
+        f"_গুরুতর সমস্যায় কৃষি অফিসে যোগাযোগ করুন।_"
+    )
+
+def get_weather():
+    try:
+        url = ("https://api.open-meteo.com/v1/forecast"
+               "?latitude=23.685&longitude=90.356"
+               "&current=temperature_2m,relative_humidity_2m,"
+               "precipitation,wind_speed_10m,weather_code"
+               "&timezone=Asia/Dhaka")
+        d = requests.get(url, timeout=8).json()['current']
+        temp  = d['temperature_2m']
+        humid = d['relative_humidity_2m']
+        rain  = d['precipitation']
+        wind  = d['wind_speed_10m']
+        code  = d['weather_code']
+
+        if code == 0:      sky = "পরিষ্কার আকাশ"
+        elif code <= 3:    sky = "আংশিক মেঘলা"
+        elif code <= 49:   sky = "কুয়াশা"
+        elif code <= 67:   sky = "বৃষ্টি"
+        elif code <= 82:   sky = "ভারী বৃষ্টি"
+        elif code <= 99:   sky = "বজ্রঝড়"
+        else:              sky = "অজানা"
+
+        advice = (f"🌤️ *আজকের আবহাওয়া (ঢাকা)*\n\n"
+                  f"🌡️ তাপমাত্রা: {temp}°C\n"
+                  f"💧 আর্দ্রতা: {humid}%\n"
+                  f"🌧️ বৃষ্টি: {rain}mm\n"
+                  f"💨 বাতাস: {wind} km/h\n"
+                  f"☁️ অবস্থা: {sky}\n\n")
+
+        if temp > 35:    advice += "🔴 খুব গরম — গাছে বেশি সেচ দিন।\n"
+        elif temp < 15:  advice += "🔵 ঠান্ডা — ফসল ঢেকে রাখুন।\n"
+        else:            advice += "🟢 আবহাওয়া স্বাভাবিক।\n"
+        if humid > 80:   advice += "⚠️ আর্দ্রতা বেশি — ছত্রাক সাবধান।\n"
+        if rain > 0:     advice += "🌧️ বৃষ্টি হচ্ছে — পানি নিকাশ করুন।\n"
+        return advice
+    except Exception as e:
+        return f"⚠️ আবহাওয়া তথ্য পাওয়া যাচ্ছে না।\nError: {e}"
+
+def process_voice(media_url):
+    try:
+        import speech_recognition as sr
+        from pydub import AudioSegment
+
+        print(f"🎤 Downloading voice...")
+        r = requests.get(media_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=15)
+        if r.status_code != 200:
+            print(f"❌ Download failed: {r.status_code}")
+            return None
+
+        audio = AudioSegment.from_file(io.BytesIO(r.content))
+        wav_buf = io.BytesIO()
+        audio.export(wav_buf, format="wav")
+        wav_buf.seek(0)
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_buf) as source:
+            audio_data = recognizer.record(source)
+
+        text = recognizer.recognize_google(audio_data, language='bn-BD')
+        print(f"✅ Transcribed: {text}")
+        return text
+    except Exception as e:
+        print(f"❌ Voice error: {e}")
+        return None
+
+def send_whatsapp(to, body):
+    """Directly send message via Twilio API — most reliable method"""
+    try:
+        msg = twilio_client.messages.create(
+            body=body,
+            from_=TWILIO_WA_NUMBER,
+            to=to
+        )
+        print(f"   ✅ Message sent! SID: {msg.sid}")
+        return True
+    except Exception as e:
+        print(f"   ❌ Send failed: {e}")
+        return False
+
+print("✅ All helper functions ready")
+
+# ── Flask App ─────────────────────────────────────────────────
+wa_app = Flask('agribot_wa')
+message_log = []
+
+@wa_app.route('/whatsapp', methods=['POST'])
+def whatsapp_webhook():
+    from_number      = request.values.get('From', '')
+    incoming_message = request.values.get('Body', '').strip()
+    num_media        = int(request.values.get('NumMedia', 0))
+    media_type       = request.values.get('MediaContentType0', '')
+    media_url        = request.values.get('MediaUrl0', '')
+
+    print(f"\n📱 [{datetime.now().strftime('%H:%M:%S')}] From: {from_number}")
+    print(f"   Text: '{incoming_message}' | Media: {num_media} | Type: {media_type}")
+
+    message_log.append({
+        'from': from_number, 'message': incoming_message,
+        'media_type': media_type, 'time': datetime.now().isoformat()
+    })
+
+    reply = ""
+
+    # ── VOICE MESSAGE ─────────────────────────────────────────
+    if num_media > 0 and 'audio' in media_type:
+        print("🎤 Voice message detected!")
+        transcribed = process_voice(media_url)
+        if transcribed:
+            result = search_kb(transcribed)
+            reply  = f"🎤 আপনি বলেছেন: \"{transcribed}\"\n\n" + format_response(result)
+        else:
+            reply = "❌ Voice message বুঝতে পারিনি।\nদয়া করে বাংলায় স্পষ্টভাবে বলুন অথবা text এ লিখুন।"
+
+    # ── IMAGE ─────────────────────────────────────────────────
+    elif num_media > 0 and 'image' in media_type:
+        if incoming_message:
+            result = search_kb(incoming_message)
+            reply  = "🖼️ *ছবি + বার্তা বিশ্লেষণ:*\n\n" + format_response(result)
+        else:
+            reply = "🖼️ ছবি পেয়েছি!\nছবির সাথে সমস্যার বিবরণ লিখে পাঠান।\n\nউদাহরণ: ধান গাছে বাদামী দাগ"
+
+    # ── EMPTY MESSAGE ─────────────────────────────────────────
+    elif not incoming_message:
+        reply = ("🌾 আপনার কৃষি প্রশ্ন লিখুন।\n\n"
+                 "উদাহরণ:\n"
+                 "• ধান গাছে বাদামী দাগ পড়ছে\n"
+                 "• আলুতে রোগ হয়েছে\n"
+                 "• জৈব সার কীভাবে তৈরি করব\n"
+                 "• আবহাওয়া")
+
+    # ── WEATHER ───────────────────────────────────────────────
+    elif any(w in incoming_message for w in ['আবহাওয়া', 'weather', 'বৃষ্টি', 'তাপমাত্রা', 'রোদ']):
+        reply = get_weather()
+
+    # ── NORMAL QUESTION ───────────────────────────────────────
+    else:
+        try:
+            result = search_kb(incoming_message)
+            reply  = format_response(result)
+            print(f"   ✅ Found: {result['disease']} ({result['confidence']:.0%})")
+        except Exception as e:
+            reply = "দুঃখিত, উত্তর খুঁজে পাওয়া যায়নি। আবার চেষ্টা করুন।"
+            print(f"   ❌ Error: {e}")
+
+    # ── SEND REPLY via Twilio API (most reliable) ─────────────
+    send_whatsapp(from_number, reply)
+
+    # Return empty TwiML — just tells Twilio "webhook OK"
+    return str(MessagingResponse()), 200, {'Content-Type': 'text/xml; charset=utf-8'}
+
+@wa_app.route('/ping', methods=['GET'])
+def ping():
+    return {'status': 'ok', 'messages': len(message_log)}, 200
+
+# ── Start Flask ───────────────────────────────────────────────
+FLASK_PORT = 5001
+
+def run_flask():
+    wa_app.run(host='0.0.0.0', port=FLASK_PORT, debug=False, use_reloader=False, threaded=True)
+
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+time.sleep(3)
+
+try:
+    import urllib.request as _ur
+    _ur.urlopen(f'http://localhost:{FLASK_PORT}/ping', timeout=5)
+    print(f"✅ Flask running on port {FLASK_PORT}")
+except Exception as e:
+    print(f"❌ Flask error: {e} — Runtime restart করুন")
+
+# ── Start ngrok ───────────────────────────────────────────────
+ngrok.set_auth_token("3CMQFlrJh4yBVsb2JI7rDwl2DQW_79mtAC6Bwc65eJGFFFZGG")
+try: ngrok.kill(); time.sleep(1)
+except: pass
+
+tunnel      = ngrok.connect(FLASK_PORT)
+webhook_url = f"{tunnel.public_url}/whatsapp"
+
+print("\n" + "="*65)
+print("🚀 AGRIBOT WHATSAPP IS LIVE!")
+print("="*65)
+print(f"\n🌐 Webhook URL: {webhook_url}")
+print("\n📋 Twilio Console → Sandbox Settings →")
+print(f"   'When a message comes in' এ এই URL দিন:\n")
+print(f"   {webhook_url}\n")
+print("   Method: HTTP POST → Save করুন")
+print("="*65)
+print("✅ Features:")
+print("   📝 Text → কৃষি পরামর্শ")
+print("   🎤 Voice → Speech-to-text → পরামর্শ")
+print("   🖼️ Image + text → পরামর্শ")
+print("   🌤️ 'আবহাওয়া' → real-time weather")
+print("="*65)
+
+# ── Live Log ──────────────────────────────────────────────────
+prev_count = 0
+print("\n📊 Live log (Ctrl+C দিয়ে থামাও):\n")
+while True:
+    try:
+        if len(message_log) > prev_count:
+            for entry in message_log[prev_count:]:
+                t = entry['time'][11:19]
+                print(f"  [{t}] {entry['from']}: {entry['message']} [{entry['media_type'] or 'text'}]")
+            prev_count = len(message_log)
+        time.sleep(3)
+    except KeyboardInterrupt:
+        print("\n✅ Bot stopped.")
+        try: ngrok.kill()
+        except: pass
+        break
+
+
+# ============================================================
+# CELL 52 — TELEGRAM BOT (Fully Fixed)
+# ============================================================
+import subprocess, sys, asyncio, time, requests, threading, os, tempfile, re
+
+print("🔄 Installing packages...")
+subprocess.run([
+    sys.executable, "-m", "pip", "install",
+    "python-telegram-bot==21.3", "httpx==0.27.2",
+    "SpeechRecognition", "pydub", "pillow", "--quiet"
+], check=True)
+subprocess.run(["apt-get", "install", "-y", "ffmpeg"], capture_output=True)
+print("✅ Packages ready\n")
+
+import speech_recognition as sr
+from pydub import AudioSegment
+from PIL import Image
+import io, pickle, scipy.sparse
+import numpy as np
+import pandas as pd
+import unicodedata
+from sklearn.metrics.pairwise import cosine_similarity
+
+TELEGRAM_TOKEN = "8588802149:AAFe2cMKEwUQvVIPaz-9RMGnuGx8IJf0cAQ"
+
+# ── Load আসল KB (Cell 51 এর মতো) ──────────────────────────
+print("📦 Loading Knowledge Base...")
+kb_df = pd.read_csv('/content/agribot_knowledge.csv', encoding='utf-8')
+with open('/content/tfidf_vectorizer.pkl', 'rb') as f:
+    tfidf_vectorizer = pickle.load(f)
+tfidf_vectors = scipy.sparse.load_npz('/content/question_vectors.npz')
+print(f"✅ KB loaded: {len(kb_df)} Q&A pairs")
+
+# ====================== HELPER FUNCTIONS ======================
+
+def clean_text(text):
+    if not text: return ""
+    text = ' '.join(text.split())
+    return unicodedata.normalize('NFKD', text).lower()
+
+# ── আসল KB থেকে search ──────────────────────────────────────
+def search_kb(question):
+    """আসল CSV knowledge base থেকে TF-IDF search"""
+    qv = tfidf_vectorizer.transform([clean_text(question)])
+    sims = cosine_similarity(qv, tfidf_vectors)[0]
+    idx = int(np.argmax(sims))
+    confidence = float(sims[idx])
+    return {
+        'answer':     kb_df.iloc[idx]['Answer'],
+        'disease':    kb_df.iloc[idx]['Disease_Name'],
+        'category':   kb_df.iloc[idx]['Category'],
+        'confidence': confidence
+    }
+
+# ── Real Weather API ─────────────────────────────────────────
+def get_weather_tg():
+    """Open-Meteo — বিনামূল্যে, real-time"""
+    try:
+        url = (
+            "https://api.open-meteo.com/v1/forecast"
+            "?latitude=23.685&longitude=90.356"
+            "&current=temperature_2m,relative_humidity_2m,"
+            "precipitation,wind_speed_10m,weather_code"
+            "&timezone=Asia/Dhaka"
+        )
+        d = requests.get(url, timeout=8).json()['current']
+        temp  = d['temperature_2m']
+        humid = d['relative_humidity_2m']
+        rain  = d['precipitation']
+        wind  = d['wind_speed_10m']
+        code  = d['weather_code']
+
+        sky_map = {
+            0: "☀️ পরিষ্কার রোদ", 1: "🌤️ প্রায় পরিষ্কার",
+            2: "⛅ আংশিক মেঘলা",  3: "☁️ মেঘলা",
+            51: "🌦️ হালকা বৃষ্টি", 61: "🌧️ মাঝারি বৃষ্টি",
+            63: "🌧️ ভারী বৃষ্টি",  80: "🌦️ ঝরঝরে বৃষ্টি",
+            95: "⛈️ বজ্রঝড়",     45: "🌫️ কুয়াশা"
+        }
+        sky = sky_map.get(code, f"কোড-{code}")
+
+        msg = (
+            f"🌤️ *আজকের আবহাওয়া — ঢাকা*\n"
+            f"{'='*28}\n"
+            f"🌡️ তাপমাত্রা : {temp}°C\n"
+            f"💧 আর্দ্রতা  : {humid}%\n"
+            f"🌧️ বৃষ্টি    : {rain} mm\n"
+            f"💨 বাতাস    : {wind} km/h\n"
+            f"☁️ অবস্থা   : {sky}\n\n"
+            f"💡 *কৃষি পরামর্শ:*\n"
+        )
+        if temp > 35:    msg += "🔴 অতিরিক্ত গরম — সেচ বাড়িয়ে দিন।\n"
+        elif temp < 15:  msg += "🔵 ঠান্ডা — ফসল ঢেকে রাখুন।\n"
+        else:            msg += "🟢 তাপমাত্রা স্বাভাবিক।\n"
+        if humid > 80:   msg += "⚠️ আর্দ্রতা বেশি — ছত্রাক রোগের ঝুঁকি।\n"
+        if rain > 0:     msg += "🌧️ বৃষ্টি হচ্ছে — পানি নিকাশ করুন।\n"
+        return msg
+    except Exception as e:
+        return f"❌ আবহাওয়া তথ্য পাওয়া যাচ্ছে না।\nকারণ: {e}"
+
+# ── Irrelevant Question Filter ───────────────────────────────
+AGRI_KEYWORDS = [
+    'ফসল','চাষ','মাটি','সার','বীজ','সেচ','পানি','বৃষ্টি','আবহাওয়া',
+    'তাপমাত্রা','আর্দ্রতা','বন্যা','খরা','ধান','গম','সবজি','ফল','গাছ',
+    'রোগ','পোকা','কীটনাশক','ছাদ বাগান','কৃষক','জমি','পাতা','শিকড়',
+    'crop','farm','soil','fertilizer','seed','irrigation','weather',
+    'temperature','humidity','plant','disease','pest','harvest','rain',
+]
+
+def is_relevant(text):
+    if not text: return False
+    t = text.lower()
+    return any(kw in t for kw in AGRI_KEYWORDS)
+
+IRRELEVANT_MSG = (
+    "❌ এই প্রশ্নটি কৃষি বা আবহাওয়া সম্পর্কিত নয়।\n\n"
+    "আমি সাহায্য করতে পারি:\n"
+    "🌾 ফসল চাষ ও পরিচর্যা\n"
+    "🌦️ আবহাওয়া তথ্য\n"
+    "💧 সেচ ও পানি ব্যবস্থাপনা\n"
+    "🌿 গাছপালার রোগবালাই\n\n"
+    "অনুগ্রহ করে কৃষি সম্পর্কিত প্রশ্ন করুন।"
+)
+
+def format_answer(result):
+    emoji = "🟢" if result['confidence'] > 0.6 else "🟡"
+    return (
+        f"{emoji} *সমস্যা:* {result['disease']}\n"
+        f"📊 *নিশ্চিততা:* {result['confidence']:.0%}\n\n"
+        f"💡 *পরামর্শ:*\n{result['answer']}\n\n"
+        f"_গুরুতর সমস্যায় কৃষি অফিসে যোগাযোগ করুন।_"
+    )
+
+# ── Voice Processing ─────────────────────────────────────────
+async def process_voice(voice_file):
+    try:
+        voice_bytes = await voice_file.download_as_bytearray()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ogg_path = os.path.join(tmpdir, "v.ogg")
+            wav_path = os.path.join(tmpdir, "v.wav")
+            with open(ogg_path, 'wb') as f:
+                f.write(bytes(voice_bytes))
+            try:
+                AudioSegment.from_ogg(ogg_path).export(wav_path, format="wav")
+            except Exception as e:
+                print(f"Audio convert error: {e}"); return None
+
+            recognizer = sr.Recognizer()
+            recognizer.energy_threshold = 300
+            recognizer.dynamic_energy_threshold = True
+            with sr.AudioFile(wav_path) as source:
+                recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                audio_data = recognizer.record(source)
+
+            for lang in ["bn-BD", "en-US"]:
+                try:
+                    text = recognizer.recognize_google(audio_data, language=lang)
+                    print(f"🎤 Voice ({lang}): {text}")
+                    return text
+                except sr.UnknownValueError:
+                    continue
+            return None
+    except Exception as e:
+        print(f"Voice error: {e}"); return None
+
+# ── Photo Processing — ResNet50 ব্যবহার ──────────────────────
+async def process_photo(photo_file, caption=""):
+    try:
+        photo_bytes = await photo_file.download_as_bytearray()
+        img = Image.open(io.BytesIO(bytes(photo_bytes))).convert("RGB")
+
+        # Cell 32 এর analyze_plant_image() call করো
+        try:
+            result = analyze_plant_image(img)
+            if result.get('error'):
+                return None, caption  # fallback to caption
+            return result, None
+        except NameError:
+            # Model load হয়নি, caption দিয়ে চালাও
+            return None, caption
+    except Exception as e:
+        print(f"Photo error: {e}"); return None, caption
+
+# ====================== BOT HANDLERS ======================
+
+async def start(update, context):
+    await update.message.reply_text(
+        "🌾 *কৃষি সহায়তা বট*\n\n"
+        "আমি কৃষি ও আবহাওয়া বিষয়ক প্রশ্নের উত্তর দিতে পারি।\n\n"
+        "📝 টেক্সট লিখুন\n🎤 ভয়েস মেসেজ পাঠান\n"
+        "📸 গাছের ছবি পাঠান\n\nকমান্ড: /help /weather",
+        parse_mode='Markdown'
+    )
+
+async def help_command(update, context):
+    await update.message.reply_text(
+        "📚 *সাহায্য মেনু*\n\n"
+        "🌾 ফসল চাষ সম্পর্কে জিজ্ঞেস করুন\n"
+        "🌦️ আবহাওয়া জানতে /weather\n"
+        "💧 সেচ পদ্ধতি জানুন\n"
+        "🌿 গাছের রোগ সম্পর্কে জানুন\n\n"
+        "⚠️ শুধুমাত্র কৃষি ও আবহাওয়া বিষয়ক প্রশ্ন করুন।",
+        parse_mode='Markdown'
+    )
+
+async def weather_command(update, context):
+    """✅ FIXED — real weather data"""
+    weather_text = get_weather_tg()
+    await update.message.reply_text(weather_text, parse_mode='Markdown')
+
+async def handle_text(update, context):
+    user_text = update.message.text.strip()
+    print(f"📝 Text: {user_text}")
+
+    # Weather keywords check
+    weather_words = ['আবহাওয়া', 'তাপমাত্রা', 'বৃষ্টি', 'weather', 'রোদ', 'temperature']
+    if any(w in user_text for w in weather_words):
+        await update.message.reply_text(get_weather_tg(), parse_mode='Markdown')
+        return
+
+    # Relevance check
+    if not is_relevant(user_text):
+        await update.message.reply_text(IRRELEVANT_MSG)
+        return
+
+    # ✅ আসল KB search
+    result = search_kb(user_text)
+    await update.message.reply_text(format_answer(result), parse_mode='Markdown')
+
+async def handle_voice(update, context):
+    await update.message.reply_text("🎤 ভয়েস প্রসেস হচ্ছে...")
+    voice_file = await context.bot.get_file(update.message.voice.file_id)
+    text = await process_voice(voice_file)
+
+    if not text:
+        await update.message.reply_text(
+            "❌ Voice বুঝতে পারিনি।\n\n"
+            "• স্পষ্ট বাংলায় বলুন\n"
+            "• শান্ত পরিবেশে রেকর্ড করুন\n"
+            "• আবার চেষ্টা করুন"
+        )
+        return
+
+    await update.message.reply_text(f"🎤 শুনেছি: *\"{text}\"*", parse_mode='Markdown')
+
+    weather_words = ['আবহাওয়া', 'তাপমাত্রা', 'বৃষ্টি', 'weather']
+    if any(w in text for w in weather_words):
+        await update.message.reply_text(get_weather_tg(), parse_mode='Markdown')
+        return
+
+    if not is_relevant(text):
+        await update.message.reply_text(IRRELEVANT_MSG)
+        return
+
+    result = search_kb(text)
+    await update.message.reply_text(format_answer(result), parse_mode='Markdown')
+
+async def handle_photo(update, context):
+    caption = update.message.caption or ""
+    photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
+
+    # ✅ ResNet50 দিয়ে analyze করো
+    img_result, fallback_caption = await process_photo(photo_file, caption)
+
+    if img_result:
+        # ResNet50 result পেয়েছি
+        conf = img_result.get('confidence', 0)
+        disease = img_result.get('disease', 'অজানা')
+        rec = img_result.get('recommendation', 'কৃষি অফিসে যোগাযোগ করুন।')
+        status = "✅ নিশ্চিত" if img_result.get('status') == 'confident' else "⚠️ অনিশ্চিত"
+        msg = (
+            f"🔍 *রোগ শনাক্তকরণ:*\n"
+            f"🌿 রোগ: {disease}\n"
+            f"📊 নিশ্চিততা: {conf:.0%} {status}\n\n"
+            f"💡 পরামর্শ:\n{rec}"
+        )
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    elif fallback_caption and is_relevant(fallback_caption):
+        # Caption দিয়ে KB search করো
+        result = search_kb(fallback_caption)
+        await update.message.reply_text(
+            "📸 ছবি পেয়েছি। Caption অনুযায়ী:\n\n" + format_answer(result),
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            "📸 ছবি পেয়েছি!\n\n"
+            "গাছের সমস্যার বিবরণ লিখুন বা ভয়েসে বলুন।\n"
+            "উদাহরণ: 'ধান গাছে বাদামি দাগ পড়েছে'"
+        )
+
+async def unknown_command(update, context):
+    await update.message.reply_text("❓ অজানা কমান্ড। /help দেখুন।")
+
+async def error_handler(update, context):
+    print(f"❌ Error: {context.error}")
+    if update and update.message:
+        await update.message.reply_text("⚠️ সমস্যা হয়েছে। আবার চেষ্টা করুন।")
+
+# ====================== RUN BOT ======================
+
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+
+async def run_bot():
+    global telegram_app
+    requests.get(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook?drop_pending_updates=true",
+        timeout=10
+    )
+    telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CommandHandler("help", help_command))
+    telegram_app.add_handler(CommandHandler("weather", weather_command))
+    telegram_app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    telegram_app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    telegram_app.add_error_handler(error_handler)
+
+    print("\n🚀 Bot starting...")
+    await telegram_app.initialize()
+    await telegram_app.start()
+    await telegram_app.updater.start_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
+        timeout=30
+    )
+    print("✅ TELEGRAM BOT IS LIVE!")
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except:
+        pass
+
+def start_bot_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(run_bot())
+    except Exception as e:
+        print(f"❌ Error: {e}")
+    finally:
+        loop.close()
+
+bot_thread = threading.Thread(target=start_bot_thread, daemon=True, name="TelegramBot")
+bot_thread.start()
+time.sleep(8)
+
+if bot_thread.is_alive():
+    print("🎉 Bot is active!")
+else:
+    print("❌ Bot failed to start.")
